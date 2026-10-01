@@ -1,0 +1,440 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1789732333566,
+      "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789734364363,
+      "tag": "0001_norwegian_xlsx",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789735163675,
+      "tag": "0002_accounts_transfers_income",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789736133695,
+      "tag": "0003_recurring_contacts_directions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789736753906,
+      "tag": "0004_category_settlement",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789736860142,
+      "tag": "0005_duplicate_dismissals",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789739602272,
+      "tag": "0006_label_income_overrides",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789739778264,
+      "tag": "0007_statement_paid_expense_marks",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789740621160,
+      "tag": "0008_category_keys_private",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789741336107,
+      "tag": "0009_paid_by_drop_old_settlements",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789741342826,
+      "tag": "0010_settlements",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1789743611732,
+      "tag": "0011_recurring_expense_amounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789745093792,
+      "tag": "0012_for_other",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789745844586,
+      "tag": "0013_expense_seed_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789746820522,
+      "tag": "0014_posted_date",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1789747526446,
+      "tag": "0015_settlement_carry_forward",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1789748508201,
+      "tag": "0016_settlement_excluded",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1789748926196,
+      "tag": "0017_return_group",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1789754167759,
+      "tag": "0018_expense_schedule",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1789754181080,
+      "tag": "0019_drop_day_of_month",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1789754930482,
+      "tag": "0020_statement_next_period",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1789800288842,
+      "tag": "0021_label_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1789809781914,
+      "tag": "0022_commute_fuel",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1789812124946,
+      "tag": "0023_expense_part_of",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1789813636826,
+      "tag": "0024_savings",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1789815471138,
+      "tag": "0025_track_balance",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1789817692164,
+      "tag": "0026_enable_banking",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1789820486230,
+      "tag": "0027_watch",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1789821168568,
+      "tag": "0028_planned_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1789829415068,
+      "tag": "0029_salary",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1789832864831,
+      "tag": "0030_merchant_icons",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1789840005057,
+      "tag": "0031_yearly_month",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1789840450778,
+      "tag": "0032_yearly_reminder",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1789882028434,
+      "tag": "0033_transaction_splits",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1789890129827,
+      "tag": "0034_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1789894893270,
+      "tag": "0035_forget_transaction",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1789896068931,
+      "tag": "0036_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1789905209752,
+      "tag": "0037_products",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1789907776174,
+      "tag": "0038_remind_before_charge",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1789909072536,
+      "tag": "0039_instruments_and_trades",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1789914369074,
+      "tag": "0040_manual_balances",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1789916544915,
+      "tag": "0041_pension",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1789917007418,
+      "tag": "0042_networth_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1789922261906,
+      "tag": "0043_price_series",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1789968213899,
+      "tag": "0044_fuel_fills",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1789985866403,
+      "tag": "0045_pension_statements",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1789986129000,
+      "tag": "0046_pension_forecasts",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1789992479196,
+      "tag": "0047_reference_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1789994201221,
+      "tag": "0048_reference_budget_map",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1789995944952,
+      "tag": "0049_reference_budget_kpi",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1790161699421,
+      "tag": "0050_payslip_vacation_balance",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1790170420386,
+      "tag": "0051_expense_changes_from_month",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1790172909351,
+      "tag": "0052_expense_mark_skipped",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1790236263402,
+      "tag": "0053_rent_notices",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1790243639119,
+      "tag": "0054_planned_payment",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1790256952665,
+      "tag": "0055_expense_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1790257326588,
+      "tag": "0056_expense_price_change",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1790399759392,
+      "tag": "0057_tax_returns",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1790401237460,
+      "tag": "0058_isk_quarter_values",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1790486946225,
+      "tag": "0059_duplicate_probe_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1790513860743,
+      "tag": "0060_recurring_expense_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1790599375786,
+      "tag": "0061_avanza_statements",
+      "breakpoints": true
+    }
+  ]
+}

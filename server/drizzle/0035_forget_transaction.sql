@@ -1,0 +1,1 @@
+ALTER TABLE `transactions` ADD `forgotten_at` text;

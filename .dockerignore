@@ -1,0 +1,21 @@
+# Never in the image: secrets, the real data, bank exports, history.
+.env
+.env.*
+secrets/
+*.pem
+data/
+exports/
+.git/
+.gitignore
+# Statements, invoices and payslips the tests read; the app never does.
+samples/
+# The tests: not run in the image.
+server/test/
+**/*.test.ts
+**/*.test.tsx
+# Built in the image, or not needed there.
+node_modules/
+dist/
+.claude/
+.DS_Store
+*.log

@@ -1,0 +1,1 @@
+ALTER TABLE `recurring_expenses` ADD `remind_before_charge` integer DEFAULT false NOT NULL;

@@ -1,0 +1,309 @@
+/*
+ * Design tokens. Components use the semantic names (bg-surface, text-muted,
+ * text-income …), never raw greys, so the light and dark themes are just
+ * these two blocks. The theme is a class on <html> (see theme.ts).
+ */
+:root {
+  color-scheme: light;
+  /* Design v2's page background: the whole app sits on it. */
+  --background: #f5f5f7;
+  --surface: oklch(100% 0 0);
+  --surface-muted: oklch(96.8% 0.007 247.896);
+  --surface-hover: oklch(96.8% 0.007 247.896);
+  --border: oklch(92.9% 0.013 255.508);
+  --border-strong: oklch(86.9% 0.022 252.894);
+  --foreground: oklch(20.8% 0.042 265.755);
+  --muted: oklch(55.4% 0.046 257.417);
+  --subtle: oklch(70.4% 0.04 256.788);
+  --primary: oklch(20.8% 0.042 265.755);
+  --primary-foreground: oklch(100% 0 0);
+  --ring: oklch(62.3% 0.214 259.815);
+  --link: oklch(50% 0.16 245);
+
+  /* Money and meaning. Expenses are the normal case: plain text, not red. */
+  --expense: var(--foreground);
+  --income: oklch(52.7% 0.154 150.069);
+  --income-soft: oklch(96.2% 0.044 156.743);
+  --transfer: oklch(55% 0.07 240);
+  --transfer-soft: oklch(96% 0.02 240);
+  --shared: oklch(54.1% 0.22 293);
+  --shared-soft: oklch(96.9% 0.016 293.756);
+  /* Jobb in the calendars (the work schedule's deadline). */
+  --work: oklch(52% 0.1 195);
+  --work-soft: oklch(96% 0.025 195);
+  --warning: oklch(55.5% 0.163 48.998);
+  --warning-soft: oklch(98.7% 0.022 95.277);
+  --warning-border: oklch(92.4% 0.12 95.746);
+  --danger: oklch(57.7% 0.245 27.325);
+  --danger-soft: oklch(97.1% 0.013 17.38);
+  --unreviewed: oklch(62.3% 0.214 259.815);
+
+  --sidebar: oklch(100% 0 0);
+  --overlay: oklch(20% 0.02 260 / 0.35);
+  --shadow: 0 8px 30px oklch(20% 0.04 260 / 0.12), 0 1px 3px oklch(20% 0.04 260 / 0.08);
+
+  /*
+   * Design v2 (Apple-inspirerad), UI-SPEC.md. Beside the tokens above, not
+   * instead of them: a view uses these once it has been redone (Översikt
+   * first), the others keep theirs until their turn.
+   */
+  --v2-canvas: #f5f5f7;
+  --v2-card: #ffffff;
+  --v2-card-inset: #f5f5f7;
+  --v2-hairline: #f2f2f4;
+  --v2-track: #f2f2f4;
+  --v2-ink: #1d1d1f;
+  --v2-ink-2: #6e6e73;
+  --v2-ink-3: #86868b;
+  --v2-accent: #0071e3;
+  --v2-accent-hover: #0077ed;
+  --v2-accent-soft: #e5f1fc;
+  --v2-accent-bar: #b9d6f3;
+  --v2-purple-soft: #f3e8fb;
+  --v2-purple-text: #8e44ad;
+  --v2-partner: #8e44ad;
+  --v2-band: #fafafa;
+  /* This month's row in a table (Pendling & bränsle). */
+  --v2-row-current: #f5f9ff;
+  --v2-positive: #34c759;
+  --v2-positive-text: #248a3d;
+  --v2-positive-soft: #e3f5e8;
+  --v2-caution: #ff9500;
+  --v2-caution-text: #c93400;
+  --v2-caution-soft: #fff1e0;
+  --v2-alarm: #ff3b30;
+  --v2-alarm-soft: #ffe5e3;
+  /* Analys' heatmap: a month far over the category's average (over 200 %). */
+  --v2-heat-high: #ffd9d3;
+  --v2-eating-out: #5e5ce6;
+  --v2-job: #5ac8fa;
+  /* Only to tell a sixth thing apart (a provider in API-kostnader); means nothing. */
+  --v2-yellow: #ffcc00;
+  /* Analys › Mat: livsmedel, restaurang & café, hämtmat (the ring, the bars, the dots). */
+  --v2-food-groceries: #34c759;
+  --v2-food-restaurants: #ff9500;
+  --v2-food-takeaway: #ffcc00;
+  /* Matvaror's shelves (by name, see analysis/groceries/shelves.ts); none: Utan hylla. */
+  --v2-shelf-dairy: #5ac8fa;
+  --v2-shelf-meat: #c8372d;
+  --v2-shelf-fish: #0a6ed1;
+  --v2-shelf-produce: #2e7d32;
+  --v2-shelf-bread: #e6cf4a;
+  --v2-shelf-pantry: #ff9500;
+  --v2-shelf-frozen: #8fcdf2;
+  --v2-shelf-snacks: #e06aa8;
+  --v2-shelf-drinks: #37c0d2;
+  --v2-shelf-coffee: #5b3a1e;
+  --v2-shelf-household: #7f8f2a;
+  --v2-shelf-hygiene: #9b4dca;
+  --v2-shelf-other: #94a3b8;
+  --v2-shelf-none: #c7c7cc;
+  --v2-segment: #e8e8ed;
+  --v2-neutral-bar: #d2d2d7;
+  --v2-segment-on: #ffffff;
+  --v2-wallet-private: #1d1d1f;
+  --v2-wallet-savings: #2c5aa0;
+  --v2-wallet-gold: #b8860b;
+  --v2-wallet-isk: #5ac8fa;
+  --v2-wallet-norwegian: #9ecbf0;
+  /* Importer's file badges: PDF, XLSX, CSV, HTML. */
+  --v2-file-pdf: #8e44ad;
+  --v2-file-xlsx: #2ea043;
+  --v2-file-csv: #1d1d1f;
+  --v2-file-html: #0b5fa5;
+  --v2-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --v2-shadow-segment: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.dark {
+  color-scheme: dark;
+  /* Design v2's page background, as in light. */
+  --background: #000000;
+  --surface: oklch(19.5% 0.014 260);
+  --surface-muted: oklch(23.5% 0.016 260);
+  --surface-hover: oklch(25.5% 0.018 260);
+  --border: oklch(29% 0.018 260);
+  --border-strong: oklch(37% 0.02 260);
+  --foreground: oklch(95% 0.006 260);
+  --muted: oklch(70% 0.018 260);
+  --subtle: oklch(55% 0.018 260);
+  --primary: oklch(95% 0.006 260);
+  --primary-foreground: oklch(19.5% 0.014 260);
+  --ring: oklch(70.7% 0.165 254.624);
+  --link: oklch(76% 0.12 245);
+
+  --income: oklch(78% 0.15 152);
+  --income-soft: oklch(27% 0.05 152);
+  --transfer: oklch(74% 0.07 240);
+  --transfer-soft: oklch(27% 0.035 240);
+  --shared: oklch(75% 0.14 293);
+  --shared-soft: oklch(28% 0.06 293);
+  --work: oklch(78% 0.1 195);
+  --work-soft: oklch(28% 0.045 195);
+  --warning: oklch(82% 0.15 80);
+  --warning-soft: oklch(26% 0.05 70);
+  --warning-border: oklch(40% 0.08 70);
+  --danger: oklch(72% 0.17 22);
+  --danger-soft: oklch(27% 0.06 22);
+  --unreviewed: oklch(72% 0.15 254);
+
+  --sidebar: oklch(17.5% 0.013 260);
+  --overlay: oklch(5% 0.01 260 / 0.6);
+  --shadow: 0 8px 30px oklch(0% 0 0 / 0.5), 0 1px 3px oklch(0% 0 0 / 0.4);
+
+  /* Design v2, dark: Apple's dark system colours. Cards lift by being lighter, not by a shadow. */
+  --v2-canvas: #000000;
+  --v2-card: #1c1c1e;
+  --v2-card-inset: #2c2c2e;
+  --v2-hairline: #38383a;
+  --v2-track: #2c2c2e;
+  --v2-ink: #f5f5f7;
+  --v2-ink-2: #98989d;
+  --v2-ink-3: #8e8e93;
+  --v2-accent: #0a84ff;
+  --v2-accent-hover: #409cff;
+  --v2-accent-soft: #0f2a47;
+  --v2-accent-bar: #2b5783;
+  --v2-purple-soft: #2e1a38;
+  --v2-purple-text: #d19ef0;
+  --v2-partner: #9b59b6;
+  --v2-band: #242426;
+  --v2-row-current: #16202d;
+  --v2-positive: #30d158;
+  --v2-positive-text: #30d158;
+  --v2-positive-soft: #0f2e18;
+  --v2-caution: #ff9f0a;
+  --v2-caution-text: #ff9f0a;
+  --v2-caution-soft: #3a2608;
+  --v2-alarm: #ff453a;
+  --v2-alarm-soft: #3d1614;
+  --v2-heat-high: #4a1d17;
+  --v2-eating-out: #5e5ce6;
+  --v2-job: #64d2ff;
+  --v2-yellow: #ffd60a;
+  --v2-food-groceries: #30d158;
+  --v2-food-restaurants: #ff9f0a;
+  --v2-food-takeaway: #ffd60a;
+  /* The dark ones (coffee, produce, fish, meat) lifted to show on the dark card. */
+  --v2-shelf-dairy: #64d2ff;
+  --v2-shelf-meat: #ff5e52;
+  --v2-shelf-fish: #3d9bff;
+  --v2-shelf-produce: #4caf50;
+  --v2-shelf-bread: #f0dc5a;
+  --v2-shelf-pantry: #ff9f0a;
+  --v2-shelf-frozen: #9ed8fa;
+  --v2-shelf-snacks: #f07bb8;
+  --v2-shelf-drinks: #4fd3e3;
+  --v2-shelf-coffee: #b08050;
+  --v2-shelf-household: #a7b83e;
+  --v2-shelf-hygiene: #bf7fe6;
+  --v2-shelf-other: #a3adbd;
+  --v2-shelf-none: #636366;
+  --v2-segment: #2c2c2e;
+  --v2-neutral-bar: #48484a;
+  --v2-segment-on: #636366;
+  --v2-wallet-private: #3a3a3c;
+  --v2-wallet-savings: #2c5aa0;
+  --v2-wallet-gold: #9a7209;
+  --v2-wallet-isk: #64d2ff;
+  --v2-wallet-norwegian: #6fa7d6;
+  /* CSV's black and HTML's dark blue lighter, or they vanish on the dark card. */
+  --v2-file-pdf: #9b59b6;
+  --v2-file-xlsx: #2ea043;
+  --v2-file-csv: #636366;
+  --v2-file-html: #2f7fcf;
+  --v2-shadow-card: 0 0 #0000;
+  --v2-shadow-segment: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+@theme inline {
+  /* The system font (SF Pro on a Mac/iPhone): its tabular figures leave hyphens
+     alone, unlike Inter's, so tabular-nums can apply everywhere. Design v2's
+     stack; no web fonts. BlinkMacSystemFont is the same font in Chrome,
+     which knows no -apple-system and would fall through to Helvetica Neue
+     (whose narrow no-break space has no width: "4564 kr"). */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-ring: var(--ring);
+  --color-link: var(--link);
+  --color-expense: var(--expense);
+  --color-income: var(--income);
+  --color-income-soft: var(--income-soft);
+  --color-transfer: var(--transfer);
+  --color-transfer-soft: var(--transfer-soft);
+  --color-shared: var(--shared);
+  --color-shared-soft: var(--shared-soft);
+  --color-work: var(--work);
+  --color-work-soft: var(--work-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-unreviewed: var(--unreviewed);
+  --color-sidebar: var(--sidebar);
+  --color-overlay: var(--overlay);
+  --shadow-panel: var(--shadow);
+
+  /* Design v2: bg-card, text-ink-2, rounded-card, shadow-card … */
+  --color-row-current: var(--v2-row-current);
+  --color-canvas: var(--v2-canvas);
+  --color-card: var(--v2-card);
+  --color-card-inset: var(--v2-card-inset);
+  --color-hairline: var(--v2-hairline);
+  --color-track: var(--v2-track);
+  --color-ink: var(--v2-ink);
+  --color-ink-2: var(--v2-ink-2);
+  --color-ink-3: var(--v2-ink-3);
+  --color-accent: var(--v2-accent);
+  --color-accent-hover: var(--v2-accent-hover);
+  --color-accent-soft: var(--v2-accent-soft);
+  --color-accent-bar: var(--v2-accent-bar);
+  --color-purple-soft: var(--v2-purple-soft);
+  --color-purple-text: var(--v2-purple-text);
+  --color-partner: var(--v2-partner);
+  --color-band: var(--v2-band);
+  --color-positive: var(--v2-positive);
+  --color-positive-text: var(--v2-positive-text);
+  --color-positive-soft: var(--v2-positive-soft);
+  --color-caution: var(--v2-caution);
+  --color-caution-text: var(--v2-caution-text);
+  --color-caution-soft: var(--v2-caution-soft);
+  --color-alarm: var(--v2-alarm);
+  --color-alarm-soft: var(--v2-alarm-soft);
+  --color-heat-high: var(--v2-heat-high);
+  --color-eating-out: var(--v2-eating-out);
+  --color-job: var(--v2-job);
+  --color-yellow: var(--v2-yellow);
+  --color-food-groceries: var(--v2-food-groceries);
+  --color-food-restaurants: var(--v2-food-restaurants);
+  --color-food-takeaway: var(--v2-food-takeaway);
+  --color-segment: var(--v2-segment);
+  --color-neutral-bar: var(--v2-neutral-bar);
+  --color-segment-on: var(--v2-segment-on);
+  --color-wallet-private: var(--v2-wallet-private);
+  --color-wallet-savings: var(--v2-wallet-savings);
+  --color-wallet-gold: var(--v2-wallet-gold);
+  --color-wallet-isk: var(--v2-wallet-isk);
+  --color-wallet-norwegian: var(--v2-wallet-norwegian);
+  --color-file-pdf: var(--v2-file-pdf);
+  --color-file-xlsx: var(--v2-file-xlsx);
+  --color-file-csv: var(--v2-file-csv);
+  --color-file-html: var(--v2-file-html);
+  --radius-card: 18px;
+  --radius-wallet: 14px;
+  --radius-inset: 12px;
+  --shadow-card: var(--v2-shadow-card);
+  --shadow-segment: var(--v2-shadow-segment);
+}

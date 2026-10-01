@@ -1,0 +1,17 @@
+{
+  "note": "Europeiska kommissionens Weekly Oil Bulletin, prishistoriken som XLSX. Adressen och arkets namn lästa från energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en 2026-09-20. Filen är öppen data, ingen nyckel och ingen inloggning.",
+  "url": "https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx",
+  "sheet": "Prices with taxes",
+  "priceColumn": "SE_price_with_tax_diesel",
+  "rateColumn": "SE_exchange_rate",
+  "lagNote": "Veckan som börjar en måndag finns i filen några dagar senare. Fyra dagar är avvägningen: hämtningen sker normalt en gång i veckan, och siffran är aldrig mer än några dagar gammal när den efterfrågas.",
+  "unitsNote": "Priserna står i euro per 1 000 liter och växelkursen i euro per krona (0,0886 = 11,28 kr/euro). Öre per liter blir pris / kurs / 10.",
+  "litresPerUnit": 1000,
+  "from": "2020-01-06",
+  "publishLagDays": 4,
+  "series": {
+    "key": "diesel_se_avg",
+    "name": "Diesel, rikssnitt Sverige",
+    "source": "Weekly Oil Bulletin, Europeiska kommissionen"
+  }
+}

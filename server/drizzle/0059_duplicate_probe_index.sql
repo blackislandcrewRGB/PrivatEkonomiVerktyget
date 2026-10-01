@@ -1,0 +1,1 @@
+CREATE INDEX `transactions_account_day_amount_idx` ON `transactions` (`account_id`,`transaction_date`,`amount`);

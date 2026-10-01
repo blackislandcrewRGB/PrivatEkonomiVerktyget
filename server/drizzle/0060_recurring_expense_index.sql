@@ -1,0 +1,1 @@
+CREATE INDEX `transactions_recurring_expense_idx` ON `transactions` (`recurring_expense_id`);

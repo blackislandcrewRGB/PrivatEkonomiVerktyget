@@ -1,0 +1,1 @@
+ALTER TABLE `transactions` ADD `posted_date` text;

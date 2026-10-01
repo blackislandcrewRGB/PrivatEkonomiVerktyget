@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `track_balance` integer DEFAULT true NOT NULL;

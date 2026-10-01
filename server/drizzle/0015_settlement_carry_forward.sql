@@ -1,0 +1,1 @@
+ALTER TABLE `settlements` ADD `carry_forward` integer DEFAULT true NOT NULL;

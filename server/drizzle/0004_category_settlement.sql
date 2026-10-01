@@ -1,0 +1,1 @@
+ALTER TABLE `categories` ADD `is_settlement` integer DEFAULT false NOT NULL;

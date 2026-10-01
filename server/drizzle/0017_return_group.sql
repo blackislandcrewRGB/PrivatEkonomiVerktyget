@@ -1,0 +1,1 @@
+ALTER TABLE `transactions` ADD `return_group_id` integer;

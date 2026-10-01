@@ -1,0 +1,1 @@
+ALTER TABLE `statements` ADD `next_period_to` text;

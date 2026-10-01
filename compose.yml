@@ -1,0 +1,30 @@
+# Privatekonomi in Docker. See docs/DRIFT.md.
+#
+#   docker compose up -d --build        # http://127.0.0.1:3001
+#
+# The port is published on this computer only (127.0.0.1): there is no login,
+# so the tool must never be reachable from the internet. To use it from other
+# devices, put it behind something that does the access control (a VPN such as
+# Tailscale or WireGuard), see docs/DRIFT.md. Settings for your own server go in
+# compose.override.yml (not in git), which Docker Compose reads on its own.
+name: privatekonomi
+
+services:
+  privatekonomi:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: privatekonomi:local
+    container_name: privatekonomi
+    restart: unless-stopped
+    # Secrets only here (Enable Banking, ntfy, PUBLIC_BASE_URL): copy .env.example to .env. Never in git.
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      - ${SECRETS_DIR:-./secrets}:/secrets:ro
+    mem_limit: 768m

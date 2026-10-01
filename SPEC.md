@@ -1,0 +1,752 @@
+# Privatekonomi – spec (v0.1, som byggt)
+
+Lokalt webbverktyg för min och min partners (Mio) privatekonomi. Det öppnas i webbläsaren på `127.0.0.1`, har en användare och ingen inloggning, och all data ligger lokalt i SQLite. Frontend och backend är separerade så att verktyget kan bli en desktop-app (Tauri).
+
+Den här filen beskriver **vad som är byggt i v0.1**. Den ska stämma med koden: ändras något som beskrivs här uppdateras beskrivningen i samma commit, och det som står här är kontrollerat i koden eller uppmätt.
+
+Kod, kommentarer, commits och variabelnamn skrivs på engelska. UI-texter skrivs på svenska.
+
+## Stack och körlägen
+
+- TypeScript överallt. React 19 + Vite + Tailwind v4 i `web/`, med Radix-primitiver (paketet `radix-ui`, med egna wrappers i shadcn/ui-stil i `web/src/components/ui`), cmdk och lucide-react. Hono + better-sqlite3 + Drizzle ORM (migreringar i `server/drizzle`) i `server/`. Diagram med Recharts. Tester med Vitest i två projekt: `server` (`server/test`) och `web` (jsdom och Testing Library, `web/src/**/*.test.tsx`).
+- **Belopp** lagras som heltal i öre (negativt = pengar ut). **Datum** lagras som `YYYY-MM-DD`.
+- **Tidszon:** verktygets kalender är svensk. Servern sätter `TZ=Europe/Stockholm` när inget annat är angivet (`server/src/timezone.ts`), och alla schemalagda jobb har `timezone: "Europe/Stockholm"`. "I dag" i webben räknas i lokal tid (`web/src/lib/today.ts`), aldrig med `toISOString()`, som ger gårdagen mellan midnatt och 01/02.
+- **Appläge:** `npm start` bygger webben och serverar den från API-porten (3001). Verktyget har ingen inloggning och ska bara nås från den egna datorn eller bakom en VPN (se `docs/DRIFT.md`).
+- **Utvecklingsläge:** `npm run dev` startar API:t på 3001 (tsx watch) och Vite på 5173, som skickar `/api` vidare till API:t.
+- **Container:** `Dockerfile` och `compose.yml`. Porten publiceras bara på `127.0.0.1`; för andra enheter används en VPN (se `docs/DRIFT.md`). Kör som `node`, med data i `/data` och hemligheter bara via `env_file`. `npm run deploy` (för den som kör på en egen server) vägrar vid ändringar som inte är committade, kör typecheck och tester och väntar på `/api/health` med rätt `commit`; återgång med `npm run deploy:rollback`. `npm run db:pull` hämtar en nattkopia till testinstansen och `npm run db:check` ger kontrollsiffror. `/api/health` har `commit` (`GIT_COMMIT` från bygget).
+- **Testinstans:** `npm run dev:test` (`PRIVATEKONOMI_INSTANCE=test`) använder portarna 3101/5174 och sin egen databas `data/test/finance-test.db`. Den vägrar starta mot `data/finance.db`.
+- **Lyssningsadress:** `HOST`, som standard `127.0.0.1` så att inget utanför datorn når servern. I containern är den `0.0.0.0`, och porten publiceras bara på värdens `127.0.0.1` (se `docs/DRIFT.md`).
+- **Bara egna namn:** varje anrop måste vara adresserat till loopback, värden i `PUBLIC_BASE_URL` eller ett namn i `ALLOWED_HOSTS` (skydd mot DNS-rebinding), och ett skrivande anrop från en webbsida måste ha en Origin med ett sådant namn. Annat får 403 och en rad i loggen (`server/src/requestGuard.ts`).
+- **Första gången:** Översikten visar *Välkommen* (`GettingStarted.tsx`) så länge ingen import är gjord: skapa konton, läs in en export, kategorisera, lägg in fasta utgifter. Stegen bockas av när de är klara.
+- **Demodata:** `npm run demo` (`scripts/demo.ts`) gör `data/demo/finance-demo.db` för ett påhittat hushåll: de påhittade bankfilerna (`server/test/fixtures/generate-bank-fixtures.ts`, förskjutna så att de slutar förra månaden) läses in genom de riktiga importerna, och fasta utgifter, lön, delning med en partner, ett ISK med två innehav, KPI och exempelpensioner läggs till. Den startas på testinstansen (port 5174) och kan inte röra `data/finance.db`.
+- **Svarstider:** servern svarar på ett anrop i taget (better-sqlite3 är synkront), så ett tungt svar håller upp alla andra. GET-svaren från Översikt, räknaren i menyn, veckodigesten, nettoförmögenheten, kassaflödet, Analys, Fasta utgifter och Lön sparas därför per adress tills databasen skrivs till (`total_changes`, och `data_version` för andra anslutningar), dagen byter eller nattkopians läge ändras – det enda i dem som följer klockan (`server/src/responseCache.ts`; svaret har `X-Cache: hit`). När servern varit ledig i 3 s räknar den om de svar som blivit inaktuella, högst 12 och de senast efterfrågade först (bara de som efterfrågats de senaste 12 timmarna), och avbryter så fort någon frågar något; den tittar var 30:e sekund. Så väntar ingen på omräkningen efter banksynken, kurserna eller en ändring. Kortens fakturacykler räknas en gång per databasläge (`perGeneration` i `server/src/db/generation.ts`), och ett schemas dragningsdag en viss månad sparas (den ändras aldrig). Index finns på transaktionernas konto, dag och belopp (dubblettsökningen) och på deras fasta utgift. API-svaren skickas gzippade, och bygget lägger brotli- och gzip-kopior bredvid webbappens textfiler (`scripts/precompress.ts`), som skickas till en webbläsare som tar emot dem.
+- **Kör redan:** en andra start på samma port och med samma databas skriver "kör redan" och avslutas. Är porten upptagen av något annat avslutas starten med ett tydligt fel.
+- **Säkerhetskopior:** vid varje serverstart skapas `data/backups/finance-<UTC>-start.db`, och de 14 senaste sparas. Före varje migrering (vid start och i `npm run db:migrate`) skapas `…-fore-migrering.db`, som aldrig rensas. Kopiorna görs med SQLites backup, så de är konsistenta även när databasen används. Varje kopia skrivs som `….db.part`, kontrolleras med `integrity_check`, görs till en enda fil (`journal_mode = DELETE`) och byter namn först därefter. Den riktiga instansen tar dessutom en **nattkopia** kl. 03:45 UTC (`…-natt.db`, de 7 senaste sparas) som en säkerhetskopia av disken kan ta med, och en misslyckad eller uteblivet nattkopia blir en uppgift i Att göra. Med `KUMA_PUSH_URL` skickar den riktiga instansen ett **hjärtslag** till Uptime Kuma var femte minut: `down` med orsak så länge databasen inte svarar, senaste nattkopian misslyckades eller ingen lyckats på 48 timmar, annars `up` (`server/src/heartbeat.ts`).
+- **LLM:** planerat men inte byggt (steg 8). Ingen API-nyckel behövs. När det byggs ska anropen gå via backend och bara köras på knapptryck.
+
+## Gränssnittet
+
+Gränssnittet görs om enligt `UI-SPEC.md`, i åtta steg. Steg 1 (designsystem och skal), steg 2 (Transaktioner), steg 3 (Att granska), steg 4 (Översikt), steg 5 (Fasta utgifter), steg 6 (Kategorier & regler), steg 7 (Delad ekonomi, Analys, Importer och Inställningar) och steg 8 (responsivt och mörkt tema) är byggda, alltså alla åtta. Därefter görs vyerna om en i taget enligt *Design v2 (Apple-inspirerad)* i `UI-SPEC.md`: Alla fem flikar i Översikt är klara (Översikt, Kassaflöde 90 dagar, Ekonomisk situation, Pension och Att fylla i), och av vyerna i sidomenyn Transaktioner, Fasta utgifter, Delad ekonomi, Importer, Kategorier & regler, Pendling & bränsle, Lön, Prylar och Inställningar; i Analys ramen och fliken Per kategori. Alla Analys flikar är omgjorda; fliken Prylar är borttagen (26/9). Se *Design v2* i `UI-SPEC.md` för hela listan.
+
+- **Skal:** en sidomeny till vänster (240 px, fälls ihop till 64 px med bara ikoner, ⌘\\) med alla vyer. *Transaktioner* har en bricka med antalet att granska, som uppdateras vid start, vid vybyte och när fönstret får fokus. Varje vy har ett sidhuvud med rubrik, och vyn kan lägga egna knappar till höger (`HeaderActions`). Vyn syns i URL:en (`/transaktioner`, `/fasta-utgifter` …), så bakåt, omladdning och länkar fungerar.
+- **Kortkommandon:** ⌃1–⌃9 byter vy (⌘1–⌘9 fungerar också där webbläsaren släpper igenom dem), ⌘K öppnar kommandopaletten och ⌘\\ fäller ihop menyn.
+- **Kommandopalett (⌘K):** den söker transaktioner (text, belopp, kontakt; högst 8 träffar och "Visa alla N träffar" som öppnar listan filtrerad), hoppar till en vy eller *Att granska* och kör åtgärder: *Importera fil*, *Uppdatera saldo: <konto>*, *Ny fast utgift*, *Registrera inkomst eller utgift*, *Visa/Dölj privata*, tema och menyn. Den hittar vyer även utan å/ä/ö.
+- **Tema:** ljust och mörkt, som standard efter systemet. Växeln finns i Inställningar › Utseende och nederst i sidomenyn, och valet sparas i webbläsaren. Färger är semantiska tokens i `web/src/styles/tokens.css` (`expense` = vanlig text, `income` grön, `transfer` dämpad blå, `shared` lila, `warning` amber, `danger` röd). Alla vyer använder tokens; bryggan för Tailwinds färgskalor är borttagen.
+- **Typografi och belopp:** systemfonten (SF Pro på Mac/iPhone), 14 px bas, tabulära siffror överallt. Belopp skrivs `−1 234,56 kr`, med riktigt minustecken och smalt hårt mellanslag mellan tusental. Inkomster visas med `+` och grön färg (`Amount`).
+- **Kategorifärger:** en palett på 16 färger som ska gå att skilja åt även för rödgrönt färgblinda (Okabe–Ito och Paul Tols "muted"), samma lista i `server/src/db/palette.ts` och `web/src/lib/palette.ts`.
+  - Varje huvudkategori har en egen palettfärg. Mat är grön (#117733) och Bil röd (vermiljon, #D55E00). Med 16 färger för 17 huvudkategorier är Övrigt neutral grå, samma grå som Okänt och *Utan kategori*.
+  - En underkategori som följer sin huvudkategori (samma färg lagrad) ritas i en ljusare ton av den, efter sin plats bland syskonen (15–60 % mot vitt). Det gäller i chip, staplar och Analys. En underkategori med egen färg behåller den.
+  - En ny huvudkategori får den första palettfärgen som ingen annan huvudkategori har, annars grått.
+- **Telefon och smala fönster (under 900 px, brytpunkten `nav`):**
+  - Sidomenyn ersätts av en nedre flikrad: Översikt, Transaktioner (med antal att granska, 99+), Fasta, Delad och *Mer*. *Mer* är ett ark med övriga vyer, *Sök och kommandon*, tema och *Visa privata*.
+  - Sidhuvudet har rubriken på egen rad och vyns knappar under, med 16 px kantmarginal och plats för flikraden och iPhones hemindikator (`safe-area-inset`).
+  - Ingen vy scrollar i sidled. Tabeller blir kortlistor: Fasta utgifter och Regler. Transaktionsraderna visar kategorin under texten (tryck för att byta). Analysens stora månadstabeller scrollar inom sin ruta med fast första kolumn, och tidslinjen i Översikten scrollar i sidled.
+  - Sidopanelen tar hela skärmen. Toasts och markeringsfältet ligger ovanför flikraden.
+  - Fält har minst 16 px text, så att iPhone Safari inte zoomar in.
+  - På pekskärm döljs tangentknappar och kortkommandoknappen, och menyknappar som annars visas vid hovring syns alltid.
+  - Layouten väljs med `useNarrow()` (matchMedia), så att bara en variant finns i DOM:en.
+- **Toasts** visas nere till höger, med *Ångra* där det går, och är gemensamma för hela appen.
+- **Återanvändbara komponenter:** `Amount`, `CategoryChip`, `AccountBadge`, `StatusPill`, `DateGroupHeader`, `SidePanel`, `FilterChip`, `BulkActionBar`, `EmptyState`, `KeyHint`/`Kbd` och `SegmentedControl`.
+- **Databasens sökväg och antal rader** visas under Inställningar › Data (tidigare i sidfoten).
+- **Inställningar** (Design v2, se `UI-SPEC.md`): sektionsnav till vänster (en chip-rad på telefon och surfplatta) och sektionerna i navets ordning. Vald sektion står i adressen (`/installningar#vakt`), och en länk från Att göra, Importer, Analys, Pendling, Lön eller Översikten går till sin sektion och fäller ut den (`?oppen=bil`). Sökningen i sidhuvudet visar bara sektioner och rader vars namn, förklaring eller sammanfattning innehåller texten. En orange siffra i navet visar var något väntar: inkomstförslag, ett samtycke som går ut inom 30 dagar eller har gått ut (eller en synk med fel, eller ett bankkonto utan konto här), nya värden från en lönespec som inte är kvitterade (`pendingChanges` i `GET /api/salary`) och ingen säkerhetskopia på två dygn.
+  - **Utseende:** tema och *Visa privata rader*.
+  - **Moduler:** *Lön* och *Pendling & bränsle* är valfria delar som är byggda för en viss sorts arbete och avstängda i en ny databas. En switch per modul sparas i `settings` (`modules`, `GET/PUT /api/settings`); en modul som är av saknas i menyn (sidomenyn, flikraden, kommandopaletten och ⌃-siffrorna), och öppnas dess adress säger vyn att modulen är avstängd, med en knapp till Moduler. En databas som användes före modulerna har båda på (datamigreringen `0023`). Modulernas API ligger kvar; bara gränssnittet döljer dem.
+  - **Konton och bankkopplingar:** en rad per konto med hur det får sina rader (Enable Banking aktiv, på väg att gå ut eller utgången, eller manuellt) och saldot. *Ändra* ger namn, anteckning och *Följ saldot* (`PATCH /api/accounts/:id`) och vilket konto varje bankkonto matar. Samtyckena med *Förnya samtycke* och *Ta bort koppling* står i foten.
+  - **Vakt:** varje typ av fynd som en switch.
+  - **En rad per sektion** för Prylar, Kassaflöde, Uthållighet och a-kassa, Pension, Referensbudget, Priser, Veckodigest, Återkommande inkomster (förslag, en rad per inkomst med senaste beloppen och *Sätt till lägsta/snitt*), Bil, Lön, Partner (Swish-nummer, och ditt eget namn, valfritt, för din initial i Delad ekonomi; sparas i `settings` som `own_name`) och Kontakter (lägga till, byta namn och ta bort). Raden sammanfattar vad sektionen står på i en mening, och ett klick fäller ut den med samma innehåll och formulär som förut.
+  - **Data:** databas, innehåll, export (*Allt som JSON* med alla tabeller, *Transaktioner som CSV* med semikolon, decimalkomma och BOM, `GET /api/data/export?format=json|csv`) och säkerhetskopior. Listan visar de fem senaste, och *Säkerhetskopiera nu* skapar en `manuell` (`GET/POST /api/data/backups`).
+  - En sektion som går att ändra har *Ändra*, som byter till formulär med *Spara* och *Avbryt*. Bara det som ändrats sparas.
+
+## Konton
+
+Kontona är hushållets egna: de görs i verktyget (Inställningar › Konton och bankkopplingar › *Nytt konto*, `POST /api/accounts`) eller vid en Swedbank-import ("+ Nytt konto"). En ny databas har inga. Ett konto har namn, sort (`bank` eller `credit_card`), anteckning, om saldot följs och en **källa** (`accounts.source`) som säger hur det fylls på:
+
+| Källa | Import | Saldo |
+|---|---|---|
+| `csv` | Allmän CSV-import med en kolumnmappning som sparas för kontot (se *Import › Allmän CSV*) | manuellt |
+| `swedbank` | Swedbank CSV (kontot binds till kontonumrets sista fyra siffror och clearing; överföringar mellan egna konton paras) | manuellt |
+| `norwegian` | Bank Norwegian XLSX + PDF | följs inte om *Följ saldot* är av (bara kortet och fakturorna) |
+| `mastercard` | Swedbank Mastercard: faktura (PDF) + internetbankens sida sparad som PDF | från PDF-fakturan (eller manuell faktura) |
+| ingen | inget: saldo och rader för hand | manuellt |
+
+Ett kreditkort kan skapas med *betalningstexten*: en regel (`merchant_rules`, överföring till kortet via `counter_account_id`) gör att betalningen av räkningen räknas som en överföring till kortet, inte en utgift. `DELETE /api/accounts/:id` tar bort ett konto utan transaktioner (och dess betalningsregel); har det transaktioner är svaret 409 tills importerna ångrats. Exempelhushållet (fyra konton, kontakter, pensioner och en studieskuld) finns bara för demon och testerna (`server/src/db/exampleHousehold.ts`); seeden (`server/src/db/seed.ts`) lägger bara in kategorier, regler, handlarkategorier och produktgrupper.
+
+*Följ saldot* (`PATCH /api/accounts/:id`) och vilket konto varje bankkonto matar. Samtyckena med *Förnya samtycke* och *Ta bort koppling* står i foten.
+  - **Vakt:** varje typ av fynd som en switch.
+  - **En rad per sektion** för Prylar, Kassaflöde, Uthållighet och a-kassa, Pension, Referensbudget, Priser, Veckodigest, Återkommande inkomster (förslag, en rad per inkomst med senaste beloppen och *Sätt till lägsta/snitt*), Bil, Lön, Partner (Swish-nummer, och ditt eget namn, valfritt, för din initial i Delad ekonomi; sparas i `settings` som `own_name`) och Kontakter (lägga till, byta namn och ta bort). Raden sammanfattar vad sektionen står på i en mening, och ett klick fäller ut den med samma innehåll och formulär som förut.
+  - **Data:** databas, innehåll, export (*Allt som JSON* med alla tabeller, *Transaktioner som CSV* med semikolon, decimalkomma och BOM, `GET /api/data/export?format=json|csv`) och säkerhetskopior. Listan visar de fem senaste, och *Säkerhetskopiera nu* skapar en `manuell` (`GET/POST /api/data/backups`).
+  - En sektion som går att ändra har *Ändra*, som byter till formulär med *Spara* och *Avbryt*. Bara det som ändrats sparas.
+
+## Konton
+
+| Konto | Typ | Saldo | Import |
+|---|---|---|---|
+| Swedbank Privatkonto | bank | manuellt | Swedbank CSV |
+| Swedbank e-sparkonto | bank (lönekonto; autogiro, hyra och kortfakturor dras här) | manuellt | Swedbank CSV |
+| Swedbank Mastercard Guld | kreditkort | från PDF-fakturan (eller manuell faktura), utskriften sätter aktuell skuld | Mastercard-faktura (PDF) + internetbankens sida sparad som PDF |
+| Bank Norwegian | kreditkort, gemensamt | följs inte (bara kortet och fakturorna) | XLSX + PDF |
+
+*Följ saldot* (`accounts.track_balance`, Inställningar › Konton och bankkopplingar › Ändra) kan stängas av per konto. Då visas inget saldo i Inställningar eller Översikten, kortet i Saldon visar bara fakturorna, "Uppdatera skuld" försvinner, och ett bankkonto räknas inte i "kvar att leva på" och påminns aldrig om.
+
+Konton binds till maskerade kontonummer (`account_ref`, `••1234`) och clearingnummer. Fullständiga kort- och kontonummer sparas aldrig, bara maskerade och hashade i fingerprint.
+
+## Datamodell (huvuddrag)
+
+- **transactions:** `source` (swedbank|norwegian|mastercard|manual|enable_banking|both; *both* = en filrad som API:et också gav, länkad), `booking_date`, `transaction_date`, `posted_date` (kortets bokföringsdag), `foreign_amount`/`foreign_currency`/`exchange_rate` (köp i annan valuta, Mastercard), `description_raw`/`description_clean` (bankens text, rörs aldrig), `label` (egen etikett, bara för visning), `counterparty` (Swish-nummer eller handlare), `amount`, `category_id`/`category_source`, `shared`, `private`, `for_other`, `paid_by` (me|partner), `is_transfer`, `counter_ref`/`counter_account_id`/`transfer_pair_id`, `recurring_expense_id`, `recurring_income_id`, `merchant_category`/`merchant_area`, `card_masked`, `fingerprint` + `occurrence_index` (unik nyckel), `match_key` (bokföringsdag|öre|normaliserad text, för att känna igen samma rad från fil och API), `entry_reference` + `bank_raw` (Enable Banking: bankens referens och hela raden som JSON, kontonummer maskade), `import_id`, `note`, `manually_edited_at`, `deleted_at`.
+- **categories:** två nivåer, `color`, `is_transfer`, `is_settlement`, `system_key` (income, salary, from_partner, to_partner, transfers, own_transfer, card_payment, unknown, groceries, restaurants, takeaway, savings). Koden hittar kategorierna via nyckeln, så de kan byta namn.
+- **transaction_splits:** ett köp uppdelat på flera kategorier: `transaction_id`, `category_id`, `amount` (öre) och `sort`. Delarna har alltid radens tecken och summerar exakt till dess belopp, och raden själv behåller sin `category_id` (den största delen). Minst två och högst tio delar; överföringar och avstämningskategorier går inte att dela upp.
+- **Kvitton:** `receipts` (ett kvitto inklistrat från butikens sida eller läst ur en PDF: `transaction_id`, `store` lidl|ica|willys|rusta, `store_area`, `purchase_date`/`purchase_time`, `total_ore` positivt, `stated_item_count`, `source` text|pdf, `raw_text` utan kort- och medlemsnummer, `deleted_at`) och `receipt_lines` (en rad per vara: `position`, `kind` item|discount|deposit|bag, `name`, `name_key`, `quantity_milli` i tusendelar, `unit`, `unit_price_ore`, `total_ore` med kvittots tecken). Raderna summerar alltid exakt till `total_ore` — annars sparas kvittot inte. Ett kvitto är metadata precis som en pryl: det räknas aldrig in i en summa, en kategori eller avstämningen.
+- **Varor:** `products` (en matvara att följa över tid: `name`, `group_id`), `product_aliases` (`name_key` unikt → `product_id`: namnet en butik trycker, och vilken vara det betyder) och `product_groups` (hyllorna: Mejeri & ägg, Snacks & godis …, egen lista skild från budgetens kategorier). Varje `item`-rad på ett kvitto får sin vara via sitt `name_key`; regler i `productRules.ts` gissar hyllan när namnet är nytt, men bara då — namn, hylla och ihopslagningar är användarens svar och skrivs aldrig över. Varor är läsning av rader som redan finns: ingen summa ändras av att en vara döps om, flyttas eller slås ihop.
+- **Prylar:** `items` (saker jag köpt och valt att lägga in: `name`, fri `category`, `purchase_date`, `price_ore` som positivt belopp, `merchant`, `purchase_url`, `note`, `owner` me|partner|shared, `status` owned|sold|returned|broken, `warranty_months`, `return_deadline`, `sold_price_ore`/`sold_date`, `deleted_at`), `item_transactions` (många-till-många mot transaktioner, utan belopp) och `item_attachments` (bild/kvitto under `data/attachments/<item_id>/`). En pryl är metadata: den räknas aldrig in i en summa, en kategori eller avstämningen, och att ta bort den rör inte transaktionen. Vyn `/prylar` (galleri, lista, kalender) beskrivs i `UI-SPEC.md` *Design v2: Prylar*; `GET /api/items` filtrerar på år eller månad, kategori, handlare (namnet i `merchantName`), ägare, status och fritext.
+- **recurring_expenses.part_of_id:** den utgift vars dragning den här ingår i (sätts till NULL om den tas bort).
+- **merchant_rules:** `pattern`, `match_type` (exact|contains|regex), `direction` (any|in|out), `category_id`, `shared_default`, `is_transfer`, `counter_account_id`, `created_from`, `hits`.
+- **Bankkopplingar:** `bank_connections` (bank, status pending|active|expired|revoked|error, `state` under kopplingen, `session_id`, `valid_until`, senaste synk och fel), `bank_accounts` (API:ets `uid`, konto här, maskat nummer, `last_booking_date`) och `bank_pending` (reserverade rader från senaste synken, aldrig i summor). `imports.via` (file|enable_banking).
+- **label_rules** (namnregler): `pattern`, `match_type` (exact|contains|regex), `label`. Unik på typ och mönster.
+- **Historik:** `networth_snapshots` (månad som nyckel, tillgångar och skulder per typ, båda nettona, illikvida för sig, och om månaden räknats fram i efterhand). En månad som räknas fram i efterhand värderar innehaven som de var den dagen, enligt affärerna fram till då.
+- **Pension:** `pension_entries` (kind, förvaltare, namn, belopp, värdedatum, placerbar, status, senast kända inbetalning, uttagsålder) och `pension_funds` (fond, belopp, andelar i tiotusendelar, andelskurs i öre, avgift i tiotusendels procent, region). Skrivs av för hand; ingen kurshämtning.
+- **Referensbudget (Konsumentverket):** `reference_budget_years` (år, källa, åldersgrupper, hushållsstorlekar, filens hash), `reference_budget_items` (post, individual|household, val som matvarianten, namn, beskrivning), `reference_budget_amounts` (post, åldersgrupp eller hushållsstorlek, belopp i öre; en tom cell har ingen rad) och `reference_budget_adjustments` (fotnoterna: barn under 8, 18–19 år, över 65). Läses vid start från `server/reference-budget/<år>.json`; filen vinner. Hushållet som referensen räknas för (personer med åldersgrupp, matvariant och valfri ålder, samt poster som inte gäller) ställs in under Inställningar › Referensbudget och sparas i `settings` (`reference_budget_household`). Vilka kategorier som jämförs med vilken post står i `reference_budget_category_map` (kategori → post, val eller *ingår ej*; en kategori utan rad *saknar mappning*), och en fast utgift kan gå före sin kategori via `reference_budget_expense_map` (hemförsäkringen skiljs så från bilförsäkringen). Jämförelsen (`compare` i `server/src/referenceBudget/compare.ts`) räknar Min del och Hela hushållet som Översikten, med rullande snitt över 12 och 3 hela månader och ett referensår per jämförelse (periodens, annars det senaste före). Visas i Analys › Konsumentverket (`?flik=konsumentverket`, Design v2, se `UI-SPEC.md`): skillnaden för 12-månaderssnittet i stor stil, per post referens, snitt 12 och 3 månader och skillnad i kr och %, orange över referensen och grön under, största avvikelse först (eller Konsumentverkets ordning), *Koppla kategori* för en post utan kategori, och noter om vad som inte ingår. Från den 15 november påminner Att göra (och Att fylla i) om nästa års fil; `docs/ANVANDNING.md` beskriver hur den läggs in. Referensen kan KPI-justeras (av som standard): varje post följer sin grupp i SCB:s KPI (`reference_budget_items.kpi`) mot gruppens snitt för referensåret, eller en månad om årsfilen anger `priceBase`.
+- **Ekonomisk situation:** `manual_balances` (det som ägs eller är skyldigt och ingen import känner till — CSN och bilen — som ett ankarbelopp med sitt värdedatum, positivt på båda sidor, med `recurring_expense_id` när en månadsdragning betalar ned det). **Uthållighet** under balansräkningen: hur länge pengarna räcker om inkomsten upphör, i månader (år över 24).
+
+- **Bara nödvändigt:** Uthållighet räknar på **fasta + dagligvaror**, inget annat rörligt och inget bränsle — pendlingen slutar med jobbet. Växeln mot *Nuvarande takt* (rörligt snitt + fasta) är borttagen från vyn (2026-09-24). API:t har kvar `current`. Har jag råd?, Kopiera läget, Vaktens *buffer_low* ("… mot det nödvändiga … kr/mån") och Ekonomisk situation-raden på Översikten räknar också med bara nödvändigt. Uträkningen står under talet.
+- **Bränslet tas från Pendling-prognosen när det finns en** (pass × literpris) och räknas då inte också som tankningar. Utan prognos räknas tankningarna. Så faller det bort av sig självt när passen upphör.
+- **Buffert** ((buffertkontot + likvida medel på Avanza) ÷ snittutgift; röd under 3 mån, gul 3–6, grön över 6 — enda nivån med färg), **Med sparandet** (plus värdepappren) och **Med a-kassa**. Likviderna kan föras över vilken dag som helst och räknas därför som buffert, med datumet för senast inlagda saldo i uträkningen.
+- **A-kassan är inkomstbaserad:** snittet av bruttolönen 12 mån från Lön-modulen, begränsat av taket, 80/70/65 % över 300 ersättningsdagar (22/mån ≈ 13,6 mån), minus preliminärskatt med lönespecarnas egen effektiva sats. Visas som *"X månader, varav Y med a-kassa"*. Utan lönespec finns ingen nivå.
+- **Alla värden är inställningar** i Inställningar › *Uthållighet och a-kassa*: buffertkonto, tak, nivåer, ersättningsdagar per månad och skattesats.
+
+**Flöde per månad** under uthålligheten: snitt över 3 hela månader, min del, och det som *faktiskt hände* (till skillnad från uthålligheten, som är vad en månad kostar härifrån).
+
+- **Nettoinkomst − fasta − rörligt = kvar efter allt.** Fasta visas också som andel av nettoinkomsten. Rörligt är netto efter återbetalningar, och hur mycket som kom tillbaka skrivs ut, eftersom uthålligheten räknar samma utgifter brutto.
+- **Vart det tog vägen:** till portföljen (med sparkvoten), till buffertkontot (kontots nettoförändring, inte överföringarna in) och *oförklarat*. Ett negativt oförklarat betyder att mer sattes undan än vad som blev över — saldona minskade.
+- **CSN** som en stapel som fylls: återstående, betalt i år och beräknad slutbetalning vid takten i år. Stapeln mäter från det inlagda ankaret och börjar därför tom.
+
+**Låst till 65+** har en egen flik, *Pension* (`/?flik=pension`), till höger om Ekonomisk situation: pensionen, som **visas och aldrig räknas in** i nettoförmögenheten eller uthålligheten. Utan inlagda pensionsvärden visar fliken ett tomläge.
+
+- Summan uppdelad på placerbart och ej placerbart, och regionfördelningen för det placerbara som en stapel.
+- **Vad som avsätts i månaden**, räknat ur Lön-modulens bruttolön (snitt av lönespecarna de senaste 12 månaderna) — **ingen antagen avkastning**, bara det som sätts av:
+  - pensionsgrundande inkomst = brutto × 0,93, högst 7,5 inkomstbasbelopp per år;
+  - inkomstpension 16 % och premiepension 2,5 % av den (krediteras årsvis, i december året efter);
+  - avtalspension SAF-LO 4,5 % av bruttolönen (betalas in månadsvis), med senast registrerade premie från försäkringsbolaget bredvid;
+  - under premiepensionen: nya avsättningar går till samma fond som i dag så länge fondvalet inte ändras.
+  - Inkomstbasbeloppet är en inställning per år med källa (Inställningar › Pension); 2026: 83 400 kr. Saknas årets används det senaste, och vyn säger det.
+- **Årsbesked** (det orangea kuvertet) läggs in för hand per inkomstår: pensionsgrundande inkomst, inkomstpensionsrätt och premiepensionsrätt. Varje år visas bredvid verktygets egen beräkning för samma år, ur lönespecarna som betalats ut det året och med samma regler, med skillnaden utskriven. Saknas lönespecar för året står beskedet ensamt.
+- **Prognos från minPension** läggs in för hand: datum, uttagsålder, pension per månad före skatt, antagandena (som minPension anger dem, obligatoriska) och en anteckning. Vyn visar den senaste prognosen per uttagsålder med datum och antaganden. **Verktyget räknar ingen egen prognos.** Är den senaste prognosen 12 månader eller äldre kommer en påminnelse i Att göra (Vakt: *pensionsprognos äldre än 12 mån*).
+- Poster och fonder skrivs av för hand från minpension.se; **ingen kurshämtning**. Varje rad bär sitt värdedatum och vyn visar det äldsta. Pennan på varje rad öppnar ett formulär för ett nytt värde: belopp, värdedatum, premie, status och fonderna (andelar och kurs eller värde; listan ersätter den sparade). *Lägg till pensionspost* lägger till en ny post med slag, förvaltare och namn.
+
+**Att fylla i** har en egen flik (`/?flik=att-fylla-i`), sist bland Översiktens flikar: allt verktyget inte kan hämta själv, en rad per uppgift, med var uppgiften finns, vilken typ av inmatning det är, hur ofta den behövs, dagen den gäller och hur gammal den är, dagen den fylldes i och en status (*Inaktuell*, *Aldrig ifylld*, *Snart dags*, *Aktuell*, *Vid behov*). Det som behöver göras står först; resten grupperat per område, i hopfällbara kort (hopfällda när allt i gruppen är aktuellt eller vid behov, och ett val för hand minns). Ett statusfilter (`?status=`) visar bara en status. *Fyll i* leder till formuläret. Fliken påminner inte — det gör Att göra och Vakten.
+
+**Historik**: nettoförmögenhet exkl. CSN 12 månader bakåt som staplar och tabell, med *i dag* som sista stapel (sparas aldrig — månaden är inte slut). Framräknade månader är ljusare, och månader utan värde är grå platshållare. Utan sparade månader står varför, med länken *Lägg in månadsvärden* till fliken Att fylla i.
+
+- Ett snapshot per månad (`networth_snapshots`), taget en gång och aldrig omräknat. **Exakt bara den dag månaden tar slut**; andra månader räknas fram bakåt och märks som **uppskattade** (ihåliga punkter på linjen).
+- Bakåtfyllningen tar kontosaldon ur transaktionerna och sparandet ur kurserna eller senast manuellt inlagda värde. En månad vars sparandevärde är okänt hoppas över helt, och vyn säger varför.
+
+- **Innehav och kurser:** `instruments` (namn, ISIN, valuta, `kind` etf|stock, `zone` base|bet, `ticker_yahoo`, `ticker_avanza`), `trades` (buy|sell|opening, konto isk|depå, antal och kurs som heltal i tiotusendelar, courtage i öre, ev. valutakurs och koppling till överföringen), `price_snapshots` (en kurs per instrument och dag), `fx_rates` (USDSEK/EURSEK per dag) och `cash_balances` (likvider per konto och dag). Innehavet lagras aldrig — det är affärerna summerade.
+- **Avanzas kontobesked:** `avanza_statements` (konto `isk`|`credit`, period, ingående och utgående likvider; unik per konto och periodstart, en ny inläsning ersätter) och `avanza_movements` (bokföringsdag, typ som Avanza skriver den – `INSÄTTNING`, `UTTAG`, `KREDIT INS`, `KREDITREGL`, `KAP DEB RÄNTA`; ett värdepapper utan namn som `VÄRDEPAPPER` – belopp och saldo efter, i öre). Inga namn, personnummer, kontonummer eller adresser, och inte filen.
+- **Sparande:** `savings_holdings` (`name`, t.ex. Avanza ISK) och `savings_values` (`holding_id`, `date`, `value` i öre, unik per innehav och dag). Innehaven är inga konton: pengarna går inte att leva på, så de står utanför saldon och prognos.
+- **Pendling & bränsle:** `work_shifts` (`month`, `shifts`), `work_shift_days` (`date`, valfria arbetsdagar), `fuel_prices` (`date` unik, `price` i öre per liter) och `odometer_readings` (`date` unik, `km`). Inställningarna ligger i `settings` under `fuel_settings`.
+- **recurring_expenses:** `amount`, dragningsschema (`schedule_type` day_of_month|last_day, `anchor_day`, `bank_day_rule` none|next|previous, `date_basis` transaction|booking), `payment_method`, `account_id`, `match_pattern`, `shared`, `category_id`, `billing_cycle`, `anchor_month` (årsvis: månaden, med `anchor_day` som dag), `remind_days` (årsvis: påminnelse dagar före, NULL = 14, 0 = aldrig), `yearly_available`, `bound_until`, `paused`, `seed_name`.
+  - `recurring_expense_amounts`: eget belopp per månad, t.ex. CSN.
+  - `recurring_expense_marks`: manuellt markerad som betald per period.
+- **recurring_income:** med `match_pattern` och `recurring_income_overrides` (förväntat belopp per månad).
+- **Övriga tabeller:**
+  - `statements`: kortfakturor, PDF eller manuella, med `paid_at` och `next_period_to` (nästa fakturas slut enligt fakturan).
+  - `imports`: logg per fil, med period.
+  - `settlements`: avstämda månader.
+  - `contacts`: namn på Swish-nummer.
+  - `merchant_category_map`: Norwegians handlarkategori → kategori.
+  - `duplicate_dismissals`, `settings` och `data_migrations`.
+  - `watch_findings`: Vaktens notifierade, avfärdade och accepterade fynd.
+  - `planned_items`: planerade utgifter och inkomster i kassaflödet.
+
+## Import
+
+Filer släpps på fliken Importer, gärna flera på en gång. Släppytan syns alltid överst (⌘K › *Importera fil* öppnar filväljaren). Sidhuvudet säger när banksynken körs och nästa gång ("Banksynk kl 06, 12 och 18 · nästa i dag 18:00", i svensk tid från `syncHours` i `GET /api/enable-banking/status`), eller i orange att en bankkoppling går ut inom 30 dagar, med *förnya*. Under släppytan finns ett kort per konto med "t.o.m. <datum>", glappet i dagar sedan dess, en statusprick och hur kontot får data (`GET /api/imports/coverage`, som också ger `kind`, `via`, senaste hämtningen `syncedAt` och senaste fakturans `lastInvoiceTo`/`nextInvoiceTo`).
+- **Pricken:** grön vid högst 1 dags glapp, orange 2–7 dagar, röd efter det. För ett kreditkort som importeras för hand gäller fakturan i stället: grön tills nästa faktura väntas (där den senaste säger att nästa slutar, annars en månad efter), orange 7 dagar till, sedan röd.
+- För ett konto som synkas räknas senaste lyckade hämtningen som t.o.m.-datum, även när den inte gav något nytt.
+
+Förhandsgranskningen är en riktig provkörning av hela importen i en transaktion som rullas tillbaka, så siffrorna är exakta. Den är en tabell per fil (källa, konto, period, nya, dubbletter, utan kategori, fel och notiser) med en gemensam *Importera N filer*. Sammanfattningen visar:
+- nya rader, hoppade dubbletter och rader utan kategori
+- möjliga dubbletter
+- okända handlarkategorier
+- överföringar och kopplingar
+
+**Allmän CSV** (`server/src/import/csvImport.ts`): en fil från vilken bank som helst läses med en kolumnmappning (`CsvMapping`): skiljetecken (`;`, `,` eller tabb), rader att hoppa över överst, om första raden är rubriker, datumkolumn och datumformat (`iso`, `ymd`, `dmy-slash`, `dmy-dot`, `dmy-dash`, `mdy-slash`), textkolumn (och en extra), beloppet som en kolumn med tecken eller som uttags- och insättningskolumn, decimaltecken och om utgifter har minustecken. Filen avkodas som UTF-8 eller Windows-1252 (som Swedbanks). Beloppen läses som heltal i öre utan flyttal. **En rad som inte går att läsa stoppar hela filen** med radnummer (högst tio visas), så en felaktig mappning aldrig ger en halv import. Raderna får källan `csv` och fingeravtrycket sha256(konto-id, `csv`, dag, text, belopp) med löpnummer för identiska rader; de går genom `runImport` som Swedbanks rader (regler, dubblettskydd, möjliga dubbletter, kopplingar till fasta utgifter). Överföringar mellan egna konton känns inte igen (ingen motkontoreferens): en regel på texten gör dem till överföringar. Bara konton med källan `csv` eller utan källa tar emot CSV (en utan källa blir `csv`); ett Swedbank-, Norwegian- eller Mastercard-konto avvisas.
+- `POST /api/imports/csv/preview` (fil, `accountId`, `mapping`): tabellens första rader och kolumnnamn, mappningen som användes (skickad, kontots sparade eller en gissning; en sparad som inte kan läsa filen ger vika för en gissning), vad den ger (antal, period, de första raderna eller felet) och med konto en provkörning av importen. Inget skrivs.
+- `POST /api/imports/csv` (fil, `accountId`, `mapping`, `dryRun`): importerar, och sparar mappningen för kontot (`settings`, nyckeln `csv_mapping_<konto>`) vid en riktig import. Svaret är importens resultat (`source: "csv"`) eller 422 med skälet.
+- Gränssnittet är *Läs in en CSV från en annan bank* på Importer (`CsvImport.tsx`): gissningen visas med varje kolumns roll över förhandsvisningen, ändringar frågas om efter en stund, och *Importera N nya* är avstängd tills filen går att läsa och något är nytt. *Nytt konto…* i kontolistan öppnar `NewAccount`.
+
+**Historiken** (`GET /api/imports`) kommer en sida i taget: hela svenska dagar tills sidan har minst 20 importer, `?before=<dag>` för nästa sida och `?via=file|enable_banking` för filtret *Filer / Banksynkar* (i URL:en som `?visa=`). Svaret är `{ imports, older: { before, from, count } | null }`, och Ångra-status räknas bara för sidan. Den visas per dag med dagens summering. Filer är alltid egna rader med tid, filtyp, källa, period, nya och dubbletter. Banksynkar visas en och en i dag och i går; äldre dagars synkar samlas på en rad per dag som fälls ut, och flera sådana dagar i rad med bara synkar blir ett band.
+- **Ångra** finns där det går (`DELETE /api/imports/:id`). Importens rader tas bort helt, så att filen kan importeras igen (mjukt borttagna rader räknas i dubblettskyddet). Fakturan som importen lade in tas också bort, men saldot den satte ändras inte tillbaka.
+- Överföringar som var parade med raderna paras om, och fasta utgifter kopplas om.
+- Det går inte när en senare import från samma bank har rört samma konto (den kan ha hoppat över eller matchat raderna), eller när en rad har ändrats för hand, tagits bort eller markerats som returnerad. Skälet visas.
+
+**Swedbank CSV** (cp1252, första raden är metadata och läses tåligt):
+- Kontot väljs per fil via kontonummer, eller `Produkt`, eller användarens val.
+- Dubblettskydd: `fingerprint = sha256(kontonr | bokf | trans | valuta | referens | text | öre)` + `occurrence_index` inom filen. Bara de rader som saknas läggs in. Befintliga rader rörs aldrig, och `Radnummer` används inte.
+- `Referens` med ett kontonummer maskeras till `counter_ref`. Pekar den på ett eget konto blir raden en intern överföring, och de två sidorna paras.
+
+**Bank Norwegian:**
+- **XLSX** är huvudkällan för köp. PDF-fakturan är huvudkällan för skuld och förfallodag.
+- **Fingerprint** (samma i båda filtyperna): `sha256('norwegian' | köpdag | handlartext i versaler | öre)`, där inbetalningar blir `INBETALNING`.
+- **`posted_date`** är exportens BookDate, alltså den dag köpet bokfördes (oftast dagen efter köpet). Den avgör vilken faktura köpet hamnar på.
+- **Reserverat-rader** importeras inte. Köp blir delade som standard.
+- **PDF:en kontrolleras** mot sammanställningen på sida 1, och fakturan registreras.
+
+**Mastercard Guld** (utfärdas av Entercard):
+- **Fakturan (PDF)** är den månatliga huvudkällan. Från sida 1–2 läses period, förfallodag ("Oss tillhanda"), total skuld, lägst att betala, ingående skuld, periodens inbetalningar och nästa fakturas slut ("köp gjorda t o m"). De blir en rad i `statements`, och saldot sätts till −skulden. En manuellt inlagd faktura med samma förfallodag ersätts. **På Översikten räknas kortets skuld fram ur fakturan** (samma regel som balansräkningen): det som är kvar på fakturan plus köpen efter fakturaperioden, och under beloppet står vad den bygger på (*"fakturan betald + 1 812 kr köpt sedan 4/9 (inläst t.o.m. 19/9)"*). En skuld inskriven för hand efter fakturaperioden gäller i stället, tills en faktura med senare period läses in.
+  - Specifikationen på sida 3 läses per kolumn: transaktions- och bokföringsdatum, beskrivning (utan raden "INTERNET TRANSAKTION"), ort med eventuellt utländskt belopp och kurs, belopp och inbetalt.
+  - Raderna måste summera till fakturans egna summor (per kort och TOTALT), och ingående skuld − inbetalningar + köp måste bli total skuld. Annars importeras inget.
+  - OCR-nummer, kontonummer, namn och adress sparas aldrig. Kortnumret sparas bara maskerat.
+- **Utskriften** (internetbankens kortsida sparad som PDF, med ⌘P) används för engångsbakfyllning.
+  - Den läses efter position och inte textordning. Datumkolumnen förankrar raderna, beskrivningen står bredvid, SEK-beloppet står på eller strax ovanför raden och en valutarad strax under.
+  - En valutarad som hamnat överst på nästa sida hör till föregående sidas sista rad.
+  - Månadsrubrikerna används bara för att kontrollera datumen. Ofullständiga rader (t.ex. den avklippta sista) hoppas över och rapporteras.
+  - Den importeras bara om *Utnyttjad kredit* är lika med den senaste importerade fakturans skuld plus alla rader efter fakturans period. Därför importeras utskrifter efter fakturor i samma omgång.
+  - En PDF utan text (bara bilder) ger ett tydligt fel.
+- **Fingerprint:** `sha256('mastercard' | transaktionsdag | normaliserad beskrivning | öre)`. Beskrivningen skrivs med versaler, utan "INTERNET TRANSAKTION", och alla inbetalningar blir `INBETALNING`.
+  - En rad utan identiskt fingerprint men med samma belopp och text inom ±3 dagar räknas också som samma köp, men bara mellan de två formaten: en fakturarad mot en rad från utskriften som ännu saknar bokföringsdag, och tvärtom. Befintliga rader får då det de saknar (bokföringsdag, ort, valuta, kort) och ändras annars aldrig.
+  - En fakturarad är aldrig samma köp som en rad från en annan faktura, eftersom fakturorna inte överlappar i bokföringsdag. Två identiska köp samma dag som hamnar på två fakturor blir därför två rader.
+  - Köp är egna som standard. INBETALNING blir en kortbetalning (överföring) och paras med "Mastercard Guld" på e-sparkontot. Kortet kan bokföra betalningen upp till 7 dagar senare.
+
+**Hyresavier (PDF)** ("HYRESFAKTURA", oftast tre i taget) släpps i samma ruta.
+- Från avin läses betalningsmottagare, avinummer, avidatum, förfallodatum, vilken månad hyran gäller ("Hyra för Oktober - 2026"), specifikationen och *Att betala*. Raderna måste summera till *Att betala*.
+- Avin hör till den månadsvisa fasta utgift vars bankens text finns i mottagarens namn, annars till utgiften som heter Hyra. Finns ingen sådan blir det ett fel som säger vad som ska göras.
+- Beloppet på avin blir utgiftens belopp för perioden den betalas i, det vill säga förfallodagens månad. Oktoberhyran med förfallodag 30/9 är septemberdragningen. Ett annat belopp än det vanliga blir därmed en egen månad under *Belopp per månad*, och syns i prognosen och Delad ekonomi innan hyran dras. Förhandsgranskningen säger "Hyra i november 2026 blir 8 000 kr (var 7 500 kr)".
+- PDF:en sparas i databasen. Utgiftens panel har blocket **Hyresavier** med månad, avinummer, förfallodag, om periodens dragning har kommit och en länk till PDF:en. PDF:en visas inline och i sandlåda (`GET /api/rent-notices/:id/pdf`).
+- Samma avi igen, med samma fil eller samma mottagare och avinummer, är *Redan importerad*. *Ångra* i historiken tar bort avin och återställer periodens belopp till det den var före.
+
+**Möjliga dubbletter:** samma konto, transaktionsdag, belopp och text men olika bokföringsdag, från olika importer. Visas under Att granska.
+
+**Fil och bank-API ser samma rader.** En rad som är ny enligt fingerprint letas också upp bland den andra källans rader på samma konto (`match_key`: bokföringsdag, belopp, texten med bara bokstäver och siffror). Finns den länkas den befintliga raden (`source = both`; från API:et läggs `entry_reference` till, från en fil fingerprinten) och inget läggs in. Kategori, delad, namn och anteckning rörs aldrig. Två likadana rader samma dag paras en mot en. Skiljer sig texten (Swedbanks CSV har t.ex. `PIZZA± M@R`) länkas raderna ändå om de är de enda med den dagen och det beloppet på var sida. Mjukt borttagna rader räknas, så de kommer inte tillbaka.
+
+**Samma transaktion från banken igen, under en ny referens.** Swedbank kan skicka samma rader med ny `entry_reference` och i en annan form. En API-rad med okänd referens jämförs därför också med rader som API:et redan gett (`both` och `enable_banking` på samma konto). Den räknas som redan hämtad om den stämmer på full `match_key`, eller om dag och belopp stämmer och den ena texten börjar som den andra. En rad vars referens finns i samma svar tas aldrig för en sådan.
+
+## Bankkopplingar (Enable Banking)
+
+Transaktioner och saldo hämtas från Swedbank (Privatkonto, e-sparkonto) och Bank Norwegian genom Enable Banking (PSD2). Mastercard Guld finns inte där och importeras som PDF som förut; Norwegians XLSX finns kvar som komplement.
+- **Konfiguration** i `.env` (aldrig i git, liksom `secrets/`): `EB_APP_ID`, `EB_PRIVATE_KEY_PATH`, `EB_REDIRECT_URL`, `PUBLIC_BASE_URL`, valfritt `NTFY_TOPIC`. Anropen bär en JWT (RS256, `kid` = app-id, `iss` enablebanking.com, `aud` api.enablebanking.com, en timme). `/privacy` och `/terms` är en mening var.
+- **Koppla** (Inställningar › Konton och bankkopplingar › *Koppla Swedbank*): `POST /auth` med bankens längsta samtycke (`maximum_consent_validity`, 180 dagar för båda) och ett slumpat `state`, sedan till banken. Callbacken (`/api/enable-banking/callback`) kräver ett känt, oanvänt `state` under en timme, gör `POST /sessions` och kopplar varje konto till ett konto här på de fyra sista siffrorna (Norwegians enda kort till Norwegian-kontot). Ett okopplat konto väljs i listan. *Förnya samtycke* gör samma sak; den gamla sessionen avslutas och hur långt varje konto hämtats följer med.
+- **Kortet** visar per bank status, giltig till (amber under 14 dagar), senaste synk, fel, kontona med "hämtat t.o.m." och reserverade rader, *Förnya samtycke*, *Koppla bort* (frågar först; hämtade rader ligger kvar) och *Synka nu*. ⌘K › *Synka banker nu* gör samma sak.
+- **Synk:** per konto `GET /accounts/{uid}/transactions` sida för sida (`continuation_key`). Första gången med `strategy=longest`, sedan från senast hämtade bokföringsdag minus 7 dagar. Bokförda rader (BOOK) går genom samma import som filerna (regler, namnregler, överföringar, fasta utgifter, länkning ovan). Reserverade (PDNG) sparas i `bank_pending` och räknas aldrig, som Norwegians Reserverat; den bokförda raden kommer som en vanlig rad. Andra statusar tas inte med. Saldot sätts på kontot med tidsstämpel, om kontot följer saldot. En synk utan något nytt lämnar ingen import i historiken, och synkar kan inte ångras där (en fel rad tas bort i Transaktioner och hämtas inte igen).
+- **Första hämtningen** av ett konto förhandsgranskas: *Synka nu* visar hur många rader som länkas, är nya och reserverade, och *Hämta* gör den. Schemat (node-cron kl. 06, 12 och 18 svensk tid, bara riktiga instansen) hoppar över konton som aldrig hämtats. Den manuella synken skickar din IP och webbläsare (`Psu-Ip-Address`, `Psu-User-Agent`), schemat inga (banken tillåter då fyra hämtningar om dygnet, per tjänst — tre går till schemat och en blir kvar till knappen, eftersom *Synka nu* från `localhost` inte har någon IP att skicka och räknas som en av de fyra). Ett nekat saldo stoppar inte resten: transaktionerna, de reserverade raderna och hur långt kontot är hämtat sparas ändå. Bankens feltexter sparas och visas aldrig med fullständigt kontonummer, bara ••1234.
+- **Mappning** (kontrollerad mot bankernas riktiga svar), så att texten blir densamma som i filerna och reglerna träffar. Belopp i öre, negativt för DBIT.
+  - *Swedbank:* typen står i `bank_transaction_code.description` och meddelandet i `remittance_information`. Texten är meddelandet (`Amazon Prime`, `LÖN`, `TELE2`); Swish-typer skrivs först (`Swish Avanza`, `Swish skickad +46…`); en överföring har motkontots nummer som meddelande och typen (`Överföring via internet`) som text, och numret blir motkontot (maskat `80000-••5678`), som CSV:ns Referens. `creditor_account` är kontot självt och används inte. Utan meddelande blir typen texten (`Sparränta`). Swedbank ger oftast ingen `entry_reference`. Ibland svarar Swedbank i en annan form: med `entry_reference` men utan `bank_transaction_code`, med typen som meddelandets sista rad (`Kortköp/uttag`, `swish skickad`) och med kortet (`K0784`) eller en referenssiffra efter texten. Den formen läses till samma text (`REFURBED`, `Swish skickad +46…`, `Swish Kinguin`).
+  - *Bank Norwegian:* texten är `creditor.name` (meddelandet har ort och land efter), annars meddelandets sista rad (`Inbetalning`, `Från …`). Handlarkategorin står i `bank_transaction_code.description` och används som filernas. Sedan september 2026 skickar banken Visas MCC-namn avkortade till 36 tecken ("Package Stores – Beer, Wine, and Liq") i stället för exportens korta namn ("PKG STORES/BEER/WINE/LIQUOR"). Där de två inte ger samma nyckel översätts Visas namn, helt eller avkortat, till exportens (`import/merchantCategoryAliases.ts`), så att samma mappning gäller båda. Koden `Betalning` blir kortbetalning. Raderna dateras på köpdagen med bankens dag som `posted_date` och delas som standard.
+  - Saknas kontonummer vid en överföring paras den ändå när raderna är de enda med motsatt belopp, samma text och högst en dags skillnad mellan två av mina bankkonton.
+- **Saldo:** det disponibla i första hand (ITAV), som i bankens app. Ett reserverat köp är redan spenderat, så det är det som ska räknas i "kvar att leva på".
+- **Fel och samtycke:** fel vid synken sparas på kopplingen, ett samtycke som gått ut stoppar synken och sätter status *Gått ut*. Båda, liksom under 14 dagar kvar och okopplade konton, blir poster i Översiktens Att göra och (med `NTFY_TOPIC`) en ntfy-notis högst en gång om dagen per sak.
+- API: `GET /api/enable-banking/status`, `POST /connect` (`{bank}`), `GET /callback`, `POST /sync` (`{dryRun?, connectionId?}`), `PUT /bank-accounts/:id` (`{accountId}`), `DELETE /connections/:id`.
+
+## Kategorisering
+
+Ordningen är:
+1. det parsern vet (kortbetalning)
+2. partnerns Swish in (Inkomst › Från partner)
+3. regler, där längst mönster vinner och riktning tas hänsyn till
+4. Norwegians handlarkategori
+5. ingen kategori
+
+Efter varje import körs kategoriseringen om på okategoriserade rader som inte är handredigerade.
+
+När användaren ändrar kategori kommer frågan **"Skapa regel för X?"**. Regeln används direkt på okategoriserade rader. Swish-nummer får regler per riktning.
+
+**Namnregler** ger nya importer ett namn (etikett) i stället för bankens text, till exempel ANTHROPIC* CLAUDE SUB → "CLAUDE Abonnemang". De matchas som kategoriregler (på handlartexten, där exakt och längst mönster vinner) men utan riktning, och används bara på rader utan eget namn. Bankens text ändras aldrig. Döper du om en enda rad (L eller *Etikett* i panelen) frågar listan "Döp om kommande nordicwell till Exempel Gym?" med *Skapa regel* (R) och *Nej*, som frågan om kategoriregel. Under etikettfältet i panelen finns också *Namnregel…*, som öppnar namndialogen för raden. En regel skapas också från *Namn* på markerade rader i Transaktioner ("Ge nya importer samma namn", med ett föreslaget mönster: den början raderna har gemensam, i hela ord) eller i fliken *Namnregler*. Den döper samtidigt om de importerade rader utan namn som den träffar, och går att ångra. En borttagen regel lämnar raderna med sina namn. API: `GET/POST /api/label-rules`, `GET /api/label-rules/suggest?ids=`, `GET /api/label-rules/preview?pattern=&exclude=`, `POST /api/label-rules/:id/undo`, `DELETE /api/label-rules/:id` och `POST /api/label-rules/restore`.
+
+I **Att granska** grupperas okategoriserade rader per motpart (för Swish numret) och riktning. Gruppen får en kategori, med regel (*kom ihåg*) eller utan. *Vet ej* sätter Övrigt › Okänt utan regel. Samma Swish-nummer åt båda hållen är ett kort med två sektioner. Se *Att granska* nedan.
+
+**Kategorier** kan skapas, byta namn och färg, flyttas (underkategorier), tas bort (tomma, eller med flytt av rader och regler) och slås ihop. *+ Ny kategori…* finns i väljarna.
+
+**Kategorier & regler** (`/kategorier`) har två paneler:
+- **Vänster: kategoriträdet.**
+  - Varje kategori visar färgprick, namn samt rader och summa de senaste 12 månaderna eller i år (*12 mån / i år*; en huvudkategori med sina underkategorier).
+  - Ett sökfält filtrerar på namn, och huvudkategorierna fälls ihop och ut (sparat i webbläsaren). Under 52 rem vybredd är trädet en egen flik (`?flik=kategorier`).
+  - Klick filtrerar högersidan (`?kategori=`), och dubbelklick byter namn.
+  - Menyn ⋯ (eller högerklick) har *Byt namn*, *Färg…*, *Ny underkategori…*, *Flytta till…*, *Slå ihop med…* och *Ta bort*.
+  - I färgväljaren finns paletten, där färger som en annan huvudkategori har är låsta, samt neutral grå, *Följ huvudkategorin* och egen färg.
+  - En underkategori kan dras till en annan huvudkategori.
+- **Höger: Regler | Namnregler | Handlarkategorier** (`?flik=namnregler`, `?flik=handlarkategorier`, H växlar).
+  - **Reglerna** har sök (/), chips med antal (Alla/Grund/Manuella, *Saknar ikon*) och sortering (flest träffar eller A–Ö). De visas 50 i taget med *visa alla*.
+  - Kolumnerna är mönster (monospace), typ, riktning, kategori-chip, källa och träffar. Träffar är de rader de senaste 12 månaderna som regeln vinner, med totalen som tooltip.
+  - Mönster (klick eller Enter) och kategori (klick eller C) redigeras i raden. Typ, riktning, *Testa mönstret* och *Ta bort* (D, med Ångra) finns i radens meny.
+  - Regler utan träff på 12 månader ligger i en hopfälld grupp *Oanvända (N)*. *Rensa oanvända …* listar dem, ingen ikryssad från början, och tar bort de ikryssade med Ångra. En ändrad regel ger kategorin åt okategoriserade rader den nu träffar, medan rader den redan kategoriserat behåller sin.
+  - **Testa mönster** (T): skriv ett mönster med typ och riktning och se direkt hur många rader det träffar, hur många som saknar kategori, och de senaste raderna. *Spara som regel* sparar det med Ångra.
+  - **Namnreglerna** är en lista med mönster → namn och hur många rader som har namnet, och en rad för att lägga till (mönster och namn, med antalet rader utan namn den döper om nu). *Ta bort* frågar först och har Ångra.
+  - **Handlarkategorierna** från Bank Norwegian har sök och filtret *Ej kopplade / Alla*. En rad utan koppling har *Välj kategori ▾*, som öppnar kategoriväljaren i raden. Märket "N saknar" och den orange markeringen gäller bara bankkategorier där något köp fortfarande saknar kategori (inte borttaget, inte överföring); raden säger då "N köp utan kategori". En bankkategori vars köp alla fått kategori av reglerna räknas inte, eftersom kopplingen bara används för kortköp som ingen regel träffar.
+- API: `GET /api/rules` har `direction` och `matches12`. Nya anrop är `PATCH /api/rules/:id`, `DELETE /api/rules/:id` och `POST /api/rules/restore`. `POST /api/rules/preview` med `examples: true` ger `total`, `uncategorized` och `rows`. `GET /api/categories/usage` har `count12`, `sum12`, `countYtd` och `sumYtd`. `POST /api/rules/delete` (`{ ids }`) tar bort flera regler i en transaktion och ger dem tillbaka, och `POST /api/rules/restore` tar också en lista.
+
+## Transaktioner
+
+Tre flikar med egna adresser: listan (`/transaktioner`), *Att granska* (`/transaktioner/granska`) och *Borttagna* (`/transaktioner/borttagna`).
+
+- **Lista:** raderna grupperas per dag under en rubrik som "Onsdag 16 september · −652 kr" (dagens summa utan överföringar, avstämning och returnerade köp). Rubriken sitter kvar överst när du scrollar. Listan är virtualiserad, så tusentals rader går snabbt.
+  - En rad visar beskrivningen (etiketten i medium, kontakt och ort i grått). En rad med ändrat namn visar bara det nya namnet; bankens text syns när du håller muspekaren över namnet och under *Etikett* i detaljpanelen., ett kategori-chip, kontot och beloppet.
+  - Före beloppet visas ikoner för delat (två personer, lila; "Mio"/"mitt" när raden helt är den andras), privat (öga), fast utgift (↻) och returnerat köp.
+  - Anteckningen står som ett litet chip direkt efter beskrivningen, före kategorin, så att det syns vad köpet var.
+  - Okategoriserade rader har en blå prick i logotypens hörn.
+  - Med *Visa överföringar* visas en överföring mellan egna konton som en dämpad rad, "e-sparkonto → Privatkonto".
+  - Överst står två kort: *September · 29 transaktioner* med In, Ut och Netto, och för en månad *Utgifter per dag* med en stapel per dag. Ett klick på en stapel skrollar listan till dagen. Se *Design v2: Transaktioner* i `UI-SPEC.md`.
+- **Period:** en månad åt gången, som standard den här. ‹ › och ← → byter månad och T går till den här. Menyn har också de senaste 24 månaderna, *Alla datum*, Norwegian-fakturor (efter bokföringsdag) och en egen period. *Visa äldre* nederst lägger till månaden före.
+- **Filter i URL:en:** `?period=2026-09&account=4&category=12` går att länka och öppnas direkt, och bakåt fungerar.
+  - Nycklar: `period` (`YYYY-MM`, `all`, `inv:YYYY-MM`), `from`/`to`, `account`, `category` (flera med komma, en huvudkategori tar med sina underkategorier), `uncategorized=1` och `unknown=1`, `source`, `owner` (`shared`/`own`/`other`), `transfers=1`, `private=only`, `recurring=1` (kopplad till fast utgift eller återkommande inkomst), `receipt=1` (med kvitto), `min`/`max` (kronor, på beloppet utan tecken), `q` och `sort=aldst` (äldst först; standard är nyast först).
+  - Den här månaden skrivs inte ut.
+  - Sidomenyn tar dig tillbaka till de senaste filtren under sessionen.
+  - Filtren är chips under summakorten: *Utan kategori · N*, *Konto ▾*, *Kategori ▾* (kategoriträd med kryssrutor), *Delade med Mio*, *Återkommande*, *Med kvitto* och *Fler ▾* med källa, vems, belopp, inkl. Okänt, överföringar och bara privata. Ett filter från Fler, och sökningen, står som eget chip som går att ta bort. *Sortering* (nyast eller äldst först) står till höger.
+  - Sökfältet sitter i sidhuvudet (/ fokuserar det) och söker i text, etikett, kontakt, anteckning och belopp.
+- **Detaljpanel** (klick eller Enter): den är icke-modal och ligger bredvid listan, så ↑/↓ flyttar den till nästa rad.
+  - Allt går att ändra där: etikett, kategori, vems (Eget/Delat/Mios, eller Delat/Mitt för det Mio betalat), privat och anteckning. På manuella rader även belopp och datum.
+  - Den visar också koppling till fast utgift, returnerat köp (markera/ångra) och *Samma handlare* (antal, summa och snitt senaste 12 månaderna, med länk till listan).
+  - Under *Regler* står reglerna som träffar raden (den som gäller har en stjärna). Där kan du skapa eller ändra en regel med redigerbart mönster, om den vinnande regeln inte redan ger raden dess kategori.
+  - *Tekniskt* visar bankens råtext, källa, import, bokföringsdag, kort, Norwegian-kategori och fingeravtryck.
+  - Knappar: *Ta bort* och *Duplicera som manuell* (kopian påverkar inte saldot).
+- **Kategoriväljaren** används i listan, panelen och för flera rader.
+  - Överst visas förslag med skäl: regelträff, Norwegians handlarkategori och vad samma handlare fått tidigare i samma riktning (`GET /api/transactions/category-suggestions?ids=…`). Sedan kommer de fem senast använda (sparas per webbläsare), och därefter alla kategorier med sök som tål å/ä/ö. Längst ned finns *Ny kategori…*.
+  - 1–9 väljer ett numrerat förslag när sökfältet är tomt.
+  - Efter en ändring på en rad visas "Skapa regel för LIDL → Mat › Livsmedel? Påverkar 12 rader till · Skapa (R) · Nej" under raden. Frågan försvinner efter 8 s.
+- **Flera rader:** kryssruta (⇧-klick för ett intervall), X/⇧X eller ⌘A. Ett fält nederst visar antal och summa och har *Kategori*, *Delad*, *Egen*, *Mios*, *Namn*, *Anteckning*, *Privat*, *Vet ej* och *Ta bort*. *Namn* (eller L) ger alla markerade rader samma namn i stället för bankens text (tomt visar bankens text igen; manuella rader måste ha ett namn och hoppas då över). *Ge nya importer samma namn* är förvalt och sparar samtidigt en namnregel (se Kategorisering). *Anteckning* (eller N) ger alla markerade rader samma anteckning, med samma förslag som i fältet. Står samma anteckning redan på alla fylls den i, och tomt tar bort den. Ändringar på flera rader, borttagning och nya regler får en toast med *Ångra* (⌘Z medan den visas).
+- **Tangentbord** (`?` visar alla):
+  - Flytta: ↑/↓ eller J/K, Home/End. Enter öppnar panelen. Esc stänger väljare, panel och regelfråga och avmarkerar sedan.
+  - Markera: X, ⇧X, ⌘A.
+  - Ändra: C kategori, S delat/eget, P privat, U Vet ej, N anteckning, L etikett, D (eller Delete) ta bort, R skapa föreslagen regel.
+  - Period och sök: ←/→ månad, T den här månaden, / sök.
+  - Alla ändringstangenter gäller de markerade raderna om några är markerade, annars raden du står på.
+- **Autokomplettering av anteckningar:** anteckningsfältet föreslår sådant du skrivit förut. Det bästa förslaget visas i grått medan du skriver (Tab eller → tar det), och upp till sex förslag visas i en lista under när fältet har fokus (↑/↓ och Enter, eller klick). Anteckningar från samma handlare kommer först, sedan samma kategori och därefter de mest använda. Ett valt förslag sparas direkt och står kvar i fältet. Stavningsvarianter (MATVAROR/Matvaror) räknas som en, och privata raders anteckningar föreslås bara när *Visa privata* är på (`GET /api/transactions/notes?for=<id>`).
+- **Privata rader** visas som en grå rad "Privat" tills *Visa privata* slås på under Inställningar (eller i ⌘K). Det gäller bara tills sidan laddas om, och en knapp nederst i sidomenyn döljer dem igen. Privata rader ingår i alla summor men delas aldrig och ingår aldrig i avstämningen. Tangenterna hoppar över dolda privata rader.
+- **Returnerad:** ett köp som skickades tillbaka kopplas ihop med sina återbetalningar (`return_group_id` = köpets id). Det görs i detaljpanelen. Förslagen är samma konto och handlare inom 120 dagar, och de ska helst summera exakt, även om återbetalningen kom i flera delar. Köpet och återbetalningarna ligger kvar i listan, överstrukna, men räknas inte i några summor, i statistiken, i takten eller i avstämningen. Köpet kan markeras innan pengarna har kommit, och *Ångra* löser upp gruppen.
+- **Uppdelat köp:** ett köp som är flera saker (Amazon: en kabel och ett par byxor) delas upp på kategorier med ett belopp per del. Beloppet på raden ändras aldrig — bara var pengarna räknas.
+  - Det görs i detaljpanelen under *Kategori* med *Dela upp på kategorier…*: en rad per del med kategori och belopp i kronor, *Lägg till del* (högst tio) och kryss för att ta bort en. **Den rad du lämnar tom tar resten**, och dess fält visar resten i grått, så ett köp med två delar bara kräver ett belopp. Under står vad som fattas ("10,00 kr är inte fördelade än") eller är för mycket, och *Spara* är släckt tills det går ihop. Delarna måste ha radens tecken, och samma kategori får inte stå två gånger.
+  - När raden är uppdelad visar panelen delarna med varsitt belopp i stället för ett chip, med *Ändra uppdelningen* och *Ta bort uppdelningen*. I listan visas den största delens kategori med ett litet **+1** efter (tooltipen listar alla delar med belopp).
+  - Raden får den största delens kategori, och får du raden en ny kategori (själv eller på flera rader) försvinner uppdelningen — en toast säger det. *Ångra* tar tillbaka den.
+  - Allt som summerar per kategori räknar delarna, inte raden: Analys (alla vyer), Översikt (takten och månaden per kategori), uppskattad mat och bränsle, Bränsle (korven på macken är inte bränsle), Vaktens "ovanligt belopp" och antalen i Kategorier & regler. Summor per rad — dagsrubriker, veckans största köp, topplistan och Delad ekonomi — räknar hela köpet som förut. Listans totaler räknar hela köpet utan kategorifilter, men med ett kategorifilter bara delarna i de valda kategorierna, så att summan stämmer med Analys. Raden under listan säger då hur många uppdelade köp som räknas med sin del.
+  - Kategorifiltret hittar ett uppdelat köp under **varje** kategori det delats i, även via huvudkategorin.
+  - CSV-exporten får en rad per del, med kolumnen *Del* ("1 av 2"); JSON-exporten har tabellen med.
+- **Ta bort:** importerade rader tas bort med soft delete (flik *Borttagna*, går att ångra). Manuella rader raderas på riktigt.
+- **Glöm:** i *Borttagna* kan en rad tas bort ur verktyget helt (`forgotten_at`). Den syns då ingenstans, inte ens bland de borttagna, men finns kvar i databasen som minnet som gör att nästa import inte hämtar köpet igen. Frågar först och går inte att ångra i gränssnittet.
+- **Att granska** (`/transaktioner/granska`) är ett inkorgsflöde, med möjliga dubbletter som egen flik (`?flik=dubbletter`):
+  - **Överst:** "338 rader i 178 grupper · 3 gjorda i dag" och en förloppslist. "Gjorda i dag" räknas per webbläsare.
+  - **Ett kort per motpart,** flest rader först. Kortet visar namn (kontaktnamn eller text), antal, summa, datumintervall och konto. Det visar också exempelrader (tre, *Visa alla* med O) och *Öppna i Transaktioner* (filtrerad på text och utan kategori).
+  - **Snabbval 1–6:** kategorier med skäl, från regel, Norwegians handlarkategori, vad samma handlare fått, liknande handlare (samma första ord, t.ex. ICA NARA för ICA KVANTUM) och de mest använda i samma riktning (`POST /api/review/quick-picks`).
+  - **Övriga val:** *Annan…* (C) öppnar kategoriväljaren och *Vet ej* (U) sätter Övrigt › Okänt.
+  - **Kom ihåg** (R) är på som standard och skapar en regel för texten, som går att ändra bakom pennan (E). För Swish gäller regeln bara den riktningen.
+  - **Efter ett val** glider kortet ut och nästa blir aktivt. En toast har *Ångra* (⌘Z), som tar bort regeln (eller ger den gamla kategorin tillbaka) och återställer raderna.
+  - **Samma Swish-nummer in och ut** är ett kort med två sektioner. Valet gäller sektionen med flest rader, eller den man klickar på. *Samma kategori för båda* (B) gör ett val och en regel för båda riktningarna. När en riktning är klar stannar markeringen på numret.
+  - **Tangenter:** ⇧J/⇧K (eller ↓/↑) byter kort och ? visar alla.
+  - **Möjliga dubbletter:** raderna står sida vid sida (äldre och nyare import) med *Ta bort den nyare* (D, med Ångra) och *Behåll båda* (B). ⇧J/⇧K byter par.
+
+## Fasta utgifter
+
+- Fasta utgifter läggs in i verktyget (*Ny fast utgift*, eller *Gör till fast utgift…* på en dragning i transaktionslistan).
+- **Dragningsschema:** `schedule_type` är fast dag (`anchor_day` 1–31; 30 blir 28/2 och 31 blir alltid sista dagen) eller sista dagen i månaden. `bank_day_rule` flyttar till nästa eller föregående svenska bankdag när dagen är en helg eller helgdag.
+  - Bankdagar är vardagar utom nyårsdagen, trettondedag jul, långfredagen, annandag påsk, första maj, Kristi himmelsfärdsdag, nationaldagen, midsommarafton, julafton, juldagen, annandag jul och nyårsafton. Påsken räknas med en algoritm, inte hårdkodade år.
+  - `date_basis` anger vilket datum historiken jämförs mot: transaktionsdag för kortköp, bokföringsdag för autogiro.
+  - `occurrenceInMonth` och `nextOccurrence` ger dragningen för en månad och nästa dragning. En dragning som flyttats in i nästa månad (28/2 → 2/3) hör fortfarande till februari, i status, koppling och delad ekonomi. Kalendern, Översikten och "Nästa autogiro" använder dem.
+- **Samma dragning för flera utgifter** (`part_of_id`): en utgift kan *dras tillsammans med* en annan, som Mobilabonnemang i Tele2-dragningen för Bredband. Den har ingen egen dragning och följer den andra utgiftens dag, konto och betalsätt. Dragningen delas så att varje del räknas som sitt belopp och den andra utgiften får resten, så en avvikande dragning i en omställningsmånad hamnar där. Status, historik, Översikten, beloppskontrollen (*Uppdatera* tar dragningen minus delarna) och Delad ekonomi räknar dragningen en gång. Dragningen är delad om någon av utgifterna är delad, men bara de delade utgifternas delar räknas i avstämningen. Väljs i panelen under *Dragning*, och listan visar "i Bredbands dragning" och "+ Mobilabonnemang".
+- **Koppling till transaktioner:** konto, `match_pattern` och det predikterade datumet ±2 dagar. Om inget träffar gäller ±5 dagar som reserv, och då flaggas raden "avvek från schemat". Högst en koppling per period. Beloppet avgör bara när flera utgifter matchar lika bra. En dragning som kopplas till en delad utgift blir delad i transaktionslistan också (inte privata rader eller rader som helt är Mios). Ändras *Delad* på utgiften följer alla kopplade rader med. En enskild dragning som görs egen räknas inte i avstämningen, och ingen förväntad dragning läggs in i dess ställe.
+- **Ändringar från en månad** (`server/src/recurring/changes.ts`, migrering `0051`):
+  - **Byte av konto** (ett nytt kort): utgiften minns kontot före (`previous_account_id`) och månaden bytet gäller från (`account_from`). Dragningar för perioder före den månaden kopplas mot det gamla kontot, också när de importeras senare (Mastercard-fakturan), och resten mot det nya. Status (förfallen eller passerad), Vaktens *utebliven dragning*, kortfakturans uppskattning och Delad ekonomi (fakturan dragningen betalas med) använder kontot för perioden. Kopplingarna som redan finns ligger kvar. Bara de som inte längre passar tas bort: de på fel konto från bytesmånaden.
+    - Byts kontot i panelen gäller bytet från nästa dragnings månad. Panelen visar "Swedbank Mastercard Guld till och med september 2026" med *Nytt konto från* (går att ändra) och *Kontot var fel från början*. Det senare tar bort det tidigare kontot, och då kopplas allt mot det nya, som förut. Ett andra byte behåller kopplingarna från det första kortet.
+  - **Pausad efter en sista dragning** (`last_period`): en pausad (uppsagd) utgift räknas, kopplas och delas till och med sin sista dragning, men inte efter. När den pausas sätts sista dragningen till månaden för den senaste kopplade dragningen, och den kan ändras i panelen. Kopplingarna ligger kvar, så dragningen som redan gjorts står kvar under *Fasta utgifter* i Delad ekonomi och Mio betalar sin halva. En dragning efter den sista kopplas inte och blir inte delad. Utan sista dragning (ingen dragning alls) räknas den inte, som förut. Att ta bort pausen tar bort sista dragningen, och dragningar som kommit under tiden kopplas.
+- **Föreslaget schema:** vid minst 4 kopplade dragningar prövas fast dag 1–31 och sista dagen, var och en med alla tre bankdagsreglerna. Förslaget är det schema som träffar flest dragningar på dagen. Vid lika antal vinner det enklare (ingen regel, nuvarande schema, sista dagen före dag 31).
+  - Förslaget visas bara om det träffar fler dragningar än det nuvarande, och inte om det nuvarande träffar de tre senaste dragningarna medan förslaget inte gör det (dagen har nyss ändrats). Det visas som "Föreslaget schema: … – stämmer med 24 av 25 dragningar" med knappen *Använd* och uppdateras aldrig automatiskt.
+- **Pris i valuta** (2026-09-24): en fast utgift kan prissättas i EUR eller USD, till exempel Claude 90 € + 25 % moms.
+  - I panelen väljer man *Pris i: kr | EUR | USD*. Med en valuta fyller man i priset utan moms och momsen i procent. Momsen är förvald till 25 %, eftersom det är svensk moms på en tjänst köpt från utlandet.
+  - Kronbeloppet räknas då ut och går inte att skriva in. Det är priset med moms gånger Riksbankens senaste kurs (`fx_rates`, som hämtas var sjätte timme) plus bankens påslag. Påslaget är medianen av hur mycket bankens kurs har legat över Riksbankens på kontots fem senaste dragningar i valutan (0–5 %, annars 0). Panelen visar uträkningen: "112,50 € med moms × 11,272 (Riksbanken 23/9) + bankens påslag 0,5 %".
+  - Beloppet skrivs till `amount` när priset, momsen, valutan eller kontot sparas och när nya kurser hämtas (`refreshForeignPrices`). Prognosen, kortfakturan och Delad ekonomi följer därför kursen.
+  - Kurserna hämtas också för valutor som bara fasta utgifter har.
+  - *Beloppet har ändrats* jämför i valutan: priset med moms mot dragningens belopp i valutan, på en cent när, så en kurs som rör sig är ingen prisändring. Saknar dragningen belopp i valutan jämförs kronorna med 3 % marginal. Meddelandet blir "Priset har ändrats 112,50 € → 22,50 € (med moms)". *Uppdatera* tar dragningens pris utan moms.
+  - En ny utgift i valuta behöver inget kronbelopp. Finns ingen kurs hämtad för valutan måste man ändå fylla i kronor.
+  - Fälten är `currency` (EUR|USD|null), `foreign_amount` (hundradelar utan moms) och `vat_percent`. Listan har `foreignPrice` och `latestForeign`.
+- **Nytt pris från nästa dragning** (2026-09-24): används till exempel när ett abonnemang nedgraderas från Claude Max till Pro.
+  - I panelen, under beloppet, finns *Ändra pris från nästa dragning…*. Där anger man en månad, förvald till nästa dragnings period (`nextPeriod`), och det nya beloppet i kronor. För en utgift i valuta anger man i stället det nya priset utan moms, och kronorna räknas med dagens kurs.
+  - Perioderna före behåller det gamla priset. Från månaden räknar prognosen, kortfakturan, Delad ekonomi och kontrollen av ändrat belopp med det nya priset.
+  - Panelen visar "Från oktober 2026: 259 kr (22,50 € med moms)" och har *Ta bort*.
+  - När en dragning för den månaden eller senare har kopplats blir det nya priset det vanliga, och ändringen försvinner (`applyPriceChanges`, efter varje koppling). Sätter man en månad som redan är dragen gäller priset direkt.
+  - Byte till årsvis ingår inte. Då pausar man den månadsvisa med sista dragning och lägger till en årsvis utgift, till exempel med *Gör till fast utgift…* på den första dragningen.
+  - Fälten är `next_from` (ÅÅÅÅ-MM), `next_amount` (kronor, räknas fram för en utgift i valuta) och `next_foreign_amount`.
+- **Belopp per månad** (i panelen) för varierande dragningar.
+- **Beloppet har ändrats:** varnar när senaste dragningen skiljer sig från det väntade beloppet för dess månad. Det varnar inte för en äldre månad utan eget belopp när senare månader har egna belopp. *Uppdatera* ändrar standardbeloppet.
+- **Vyn:**
+  - **Min del | Hushållet** (samma val som i Översikt och Analys) står i sidhuvudet. *Min del* räknar delade utgifter till hälften i raderna ("halva av 7 500 kr"), gruppsummorna, kalendern och korten. *Hushållet* räknar allt fullt.
+  - Överst finns en hero (sedan 2026-09-25 i stället för tre kort; se *Design v2: Fasta utgifter* i `UI-SPEC.md`):
+    - *Fasta utgifter per månad, min del / hushållet*: de månadsvisa utgifterna, det som dras varje månad, som stor siffra. Årsvisa utgifter räknas inte i summan (2026-09-24). Under Hushållet står det uppdelat per betalsätt.
+    - *Med mat och bränsle*: samma summa plus Uppskattat, till höger i kortet.
+    - **Lönestapeln** under Min del: hela bredden är snittlönen, med segmenten Fasta, Mat, Bränsle och *Kvar av lönen*. Under stapeln står "utan mat och bränsle är … kr kvar av lönen". Snittlönen är snittet av de sex senaste lönerna som har kommit in (`salary` i `GET /api/recurring-expenses/estimates`), räknad per den månad lönen gäller och avrundad till hela kronor. Lön visar samma snitt över tolv löner (*Snitt 12 mån*). Blir summan större än lönen försvinner Kvar-segmentet, stapeln får röd kant och texten "… kr över snittlönen". Under Hushållet visar stapeln bara Fasta, Mat och Bränsle som delar av summan, utan lön, eftersom Mio betalar sin halva av det delade.
+    - **Den här månaden**: kvar att dra, det vill säga allt som ännu inte är draget eller markerat betalt denna månad (också förfallet och passerat), samma som gruppernas "kvar denna månad" tillsammans. Den visar också "N av M kommande" och en stapel för andelen dragna. Årsvisa räknas inte, de har ingen dragning den här månaden.
+    - **Eget** är de månadsvisa utgifterna som inte är delade ("per månad · delat …"). **Årsvis** är årsbeloppen, med "per år · … kr/mån", alltså det man lägger undan varje månad.
+  - **Uppskattat** (under listan) är mat och bränsle per månad, som om de vore fasta.
+    - Mat är snittet av de tre senaste hela månaderna för Livsmedel, Restaurang & café och Hämtmat (inte Alkohol). Det används automatiskt, och kortet skriver "(snitt)". Ett belopp man skriver in för hushållet gäller i stället, och *använd snittet* tar bort det.
+    - Bränsle tas från Pendling & bränsles prognos för månaden, annars från snittet.
+    - Min del är andelen som varit min de tre månaderna (maten är dels delad mat, dels egna luncher), inte en fast halva.
+    - Uppskattningarna visas bara. Kassaflödet och "kvar att leva på" räknar mat och bränsle på sitt eget sätt.
+    - Mat sparas i `settings` under `expense_estimates`. API: `GET/PUT /api/recurring-expenses/estimates` `{food}`.
+  - *Lista | Kalender* i sidhuvudet, med läge och månad i URL:en (`?vy=kalender&manad=2026-10`).
+  - **Listan är en läsvy** med ett kort per konto och sist Årsvis. Varje grupp har kontots Wallet-färg, antal, kvar denna månad, nästa dragning och summa per månad, och kan fällas ihop. Det minns enheten (localStorage).
+    - En rad har namn (med etiketter för pausad, bunden, schemaförslag, avvikelser och delar av en dragning), belopp (orange med pil när det har ändrats), dag med nästa dragning, kategori med delad-ikonen, status för månaden (för årsvisa "i år") och senast dragen. Kontot står i gruppens huvud, inte på raden.
+    - När listan är smalare än 760 px (telefon, surfplatta, panelen öppen bredvid) blir varje rad ett litet kort: belopp och dag under namnet, kategorin under dem, status och senast dragen i en kolumn.
+    - Klick eller Enter öppnar panelen.
+  - **Panelen** har alla fält: namn, belopp, dag, vid helgdag, jämför med, betalsätt, konto, kategori (samma väljare som i Transaktioner), delad, bankens text, betalas månads- eller årsvis, finns årsvis, bunden t.o.m., länk, anteckning och pausad (med sista dragning). Under konto visas ett kontobyte med månaden det gäller från. Ett fält sparas när man lämnar det.
+  - **Månader utan dragning** (månadsvisa): i panelen går det att lägga till och ta bort månader då utgiften inte drogs, till exempel när ett abonnemang var pausat ett tag. För de månaderna väntas ingen dragning. De blir inte *förfallen*, ger ingen utebliven dragning i Vakten, räknas inte i kortfakturans uppskattning, kassaflödet eller Delad ekonomi, och räknas inte heller som att abonnemanget har slutat dras. Kommer det ändå en dragning kopplas och räknas den som vanligt.
+  - **Årsvis:** en årsvis utgift har ett datum, dag och månad, när den förnyas eller ska vara betald ("varje år 30 juni"). Panelen visar då Datum med en månadsväljare i stället för Dag. En dragning kopplas till årets post om den kommer från 45 dagar före till 10 dagar efter datumet (fakturor betalas i förväg), en per år, och räknas aldrig som avvikelse från schemat. Utan månad har en årsvis utgift inget datum och kopplas inte.
+  - **Var årsvisa syns:**
+    - *Fasta utgifter:* en egen grupp **Årsvis** sist, sorterad efter nästa datum. Raden visar datumet ("30 jun"), årsbeloppet och nästa datum med år när det är ett annat år. Statuskolumnen visar i årets status ("dragen · i år"). Gruppens rad visar summa per år och per månad. Rutan *Årsvis* i heron visar "5 303 kr · per år · 442 kr/mån att lägga undan". Min del halverar delade poster.
+    - *Kalendern:* posten syns i sin månad. En årsvis utan månad står under "Utan dag".
+    - *Översikten, tidslinjen, kvar att leva på, Kassaflöde 90 dagar och veckodigesten:* posten räknas på sitt datum. Ett kort kommer med i kortfakturans uppskattning.
+    - *Delad ekonomi:* en delad årsvis post väntas i sin månad.
+    - *Panelen:* "Markera betald" gäller årets period.
+  - **Påminnelse** (Vakt, `yearly_renewal`, kan stängas av i Inställningar): från `remind_days` dagar före datumet (14 som standard), tills posten är betald eller markerad.
+    - Abonnemang: "TV-paketet förnyas 1/10 (1 620 kr), om 12 dagar – behålla den?" med *Behåll* (borta för i år) och *Avsluta* (pausar).
+    - Faktura (betalsätt överföring): "Bilskatt (3 200 kr) ska vara betald senast 30/9" med *Markera betald* och *Påminn inte i år*.
+    - Panelen har fältet *Påminn* (dagar före, 0 = aldrig).
+- **Tillfälliga abonnemang:** en utgift som inte är årsvis kan bevakas med `remind_before_charge` — *Säg till innan den dras*, `remind_days` dagar före (3 som standard). Vakten frågar då inför **varje** dragning (`charge_coming`) tills utgiften pausas: *"Podme dras 10/10 (99 kr), om 3 dagar – säga upp den innan dess?"* Det är för det man startat för en månad och tänker säga upp i tid.
+  - Knappen **Påminn innan nästa dragning…** i transaktionspanelen gör köpet till en fast utgift och bevakar den direkt (`POST /api/transactions/:id/watch-charge`). Namn, belopp, konto, dag och sökmönster tas ur raden; mönstret är handlartexten fram till referensen som byts varje gång (`Podme 4F8-2A61C9` → `Podme`, `GOOGLE*CLOUD KLM` → `GOOGLE`), och namnet är radens etikett om den har en. Hör raden redan till en fast utgift bevakas bara den. Toasten säger vart den tog vägen och har *Ångra*.
+- **Gör till fast utgift…** (i transaktionspanelen, under *Påminn innan nästa dragning…*) gör ett köp till en fast utgift, månads- eller årsvis.
+  - Formuläret har tre fält:
+    - **Namn**, förifyllt och markerat så att det man skriver ersätter det.
+    - **Betalas**, *Månadsvis* eller *Årsvis* (årsvis är förvalt).
+    - **Bankens text**, förifylld som i *Påminn*.
+  - Belopp, konto och dag tas från köpet, och för en årsvis utgift också månaden. En rad under fälten säger vad det blir: "999,00 kr varje år 25 maj från Swedbank Privatkonto".
+  - När utgiften skapas kopplas köpet till den, liksom tidigare köp med samma text som passar schemat. En årsvis utgift kopplar köp från 45 dagar före till 10 dagar efter datumet.
+  - Knappen visas bara för köp, inte för en överföring, en återbetalning eller ett köp som redan hör till en fast utgift. Bankens text måste finnas i köpets text och ha minst tre tecken.
+  - Toasten har *Ångra*, som tar bort utgiften.
+  - API: `GET /api/transactions/:id/recurring-draft` (förslaget) och `POST /api/transactions/:id/make-recurring {name, cycle: monthly|yearly, pattern}`.
+  - **Missad årsdragning** (`missed_charge`): 10 dagar efter datumet, när posten har dragits minst en gång förut, i högst 90 dagar. Den har *Markera betald* och *Pausa*. "Avslutat?"-fyndet gäller bara månadsvisa.
+    - Överst i panelen finns månadens status med *Markera betald* / *Ångra*. Där visas också *Beloppet har ändrats* som en amber rad med *Uppdatera* och *Föreslaget schema* med *Använd*.
+    - Under fälten finns dragningarna de senaste 12 månaderna som staplar (streckat = väntat), de kopplade dragningarna (klick öppnar dem i Transaktioner) och belopp per månad.
+    - *Ta bort* sitter i foten.
+  - **+ Ny fast utgift** (N) öppnar samma panel tom, och *Skapa* sparar.
+  - **Kalendern** är en månadsvy med måndag först.
+    - Varje dragning är ett chip i kontots färg, med bock när den är dragen eller betald. Lönedagen, i dag och helger är markerade.
+    - Klick på en dag visar dagens dragningar under kalendern, och klick på ett chip öppnar panelen.
+    - ←/→ byter månad och T går till i dag.
+    - **Schemadeadline (Jobb):** dagen då arbetsschemat för nästa månad senast ska ha kommit syns som ett eget chip i färgen för jobb ("Schema november"), med jobb i förklaringen. Under dagen står "Schemadeadline: schema för november ska vara mottaget" med *Mottaget* / *Ångra*.
+  - **Tangenter:** ↓/↑ eller J/K, Enter, Esc, N, V (lista/kalender) och ?.
+  - API: listan har `thisMonth` (månadens dragning och status). `GET /recurring-expenses/:id/history` ger 12 månader och de kopplade dragningarna.
+
+## Översikt
+
+Uppifrån och ned: svaret, Att göra, de kommande 14 dagarna, saldon och månaden per kategori. I sidhuvudet finns *Min del | Hushållet* och *Registrera*. Flikarna *Kassaflöde 90 dagar*, *Ekonomisk situation* och *Pension* beskrivs nedan; på dem är sidhuvudets växel dold: Ekonomisk situation och Pension räknar alltid din del, och Kassaflöde räknar pengarna på dina konton.
+
+- **Svaret:** *Pengar nu* i stor stil: bankkontona vars saldo följs plus likviderna på ISK, med raden "Privatkonto 114 kr + e-sparkonto 190 kr + likvider på ISK 4 260 kr" under (`money` i `GET /api/overview`).
+  - Till höger visas **Dagar utan köp** i månaden (`noSpend`): en plupp per dag, grön när inget köpts, grå när något köpts, en ring för i dag och ljusa pluppar för dagarna som kommer. Överst står "11 av 23", och håller man över en plupp syns vad som köptes.
+    - Livsmedel (Mat › Livsmedel) och bilen räknas inte som köp. Bilen är huvudkategorin som drivmedlet ligger under: drivmedel, parkering, service och besiktning, trängselskatt och infrastrukturavgift. Inte heller fasta utgifter, överföringar och pengar mellan dig och Mio räknas.
+    - Det som räknas är det du betalat, på köpdagen. Ett kortköp som bokförs två dagar senare hör till dagen det gjordes.
+    - Dagar med köp är grå, inte röda, eftersom pluppen ska ge beröm, inte skäll.
+  - Under den visas **Restaurang & hämtmat** i månaden (`eatingOut`): en lila plupp de dagar hushållet åt ute eller hämtade mat (Mat › Restaurang & café och Mat › Hämtmat), med "7 gånger · 1 885 kr" överst. Det gäller hela hushållet, alltså också det Mio betalat, och räknas på köpdagen. Returer räknas inte. Håller man över en plupp syns vad och var.
+  - Under Pengar nu finns **Livsmedel i september, per vecka** (`groceryWeeks`).
+    - Det är en stapel per vecka, måndag till söndag, som kapas vid månadens början och slut: v.36 1–6/9, v.37 7–13/9 och så vidare. Beloppet står ovanför stapeln.
+    - Den här veckan visas ljusare, eftersom den gäller hittills. Kommande veckor är tomma.
+    - Överst står månadens summa och "vanlig vecka": snittet per sju dagar de tre senaste hela månaderna. Samma snitt visas som en streckad linje över staplarna.
+    - Bara Livsmedel räknas, med underkategorier. Det gäller hela hushållet, räknas på köpdagen och tar med uppdelade köps del. Restaurang och hämtmat har egna pluppar.
+    - Håller man över en stapel syns veckan, datumen och beloppet.
+  - **Snitt** under Livsmedel och under Restaurang & hämtmat (`usual`): "snitt 4 739 kr så här långt · 5 495 kr/mån · 1 295 kr under".
+    - Snittet är de tre senaste hela månaderna till och med samma dag i månaden, så att en halv månad jämförs med halva månader. Det finns också snittet för en hel månad.
+    - Skillnaden står i grönt under snittet och i orange över det.
+    - Allt räknas för hushållet på köpdagen, med uppdelade köps del.
+  - Under Dagar utan köp står samma sak för det du har köpt: "köpt för 3 280 kr · snitt 6 242 kr så här långt · 9 845 kr/mån · 2 962 kr under". Det räknar det rörliga och flytande, som prylar, Amazon, nöje, restaurang och hämtmat. Livsmedel, bilen, fasta utgifter och överföringar räknas inte, precis som för pluppen. Det är det du betalat, räknat på köpdagen. Återbetalningar räknas inte, varken i månaden eller i snittet.
+  - *Kvar att leva på* och utgiftstakten visas inte längre. Beräkningen finns kvar i `forecast` för veckodigesten.
+  - **Nästa lön** är en rad i kortet. Den största aktiva inkomsten används, med förväntat belopp per månad (*ändra*), och raden visar *Lön mottagen* när lönen har kommit. En lön som är upp till 5 dagar sen räknas fortfarande som väntad.
+- **Att göra:** uppgifter med en knapp var. Rubriken visas bara när det finns något, och varje uppgift kan avfärdas för dagen (per webbläsare).
+  - Kortfaktura som förfaller inom 14 dagar eller har förfallit: *Markera betald*, med Ångra.
+  - Vaktens fynd, ett per rad (se *Vakt* nedan), med sin knapp. De avfärdas för gott, inte för dagen, med Ångra direkt efteråt.
+  - Försenad lön och Mastercard-fakturan som inte är importerad från den 10:e: *Importera*.
+  - Bankkontosaldo äldre än 7 dagar eller inte ifyllt: *Uppdatera*.
+  - Rader att granska: *Öppna*.
+  - Ändrade belopp: *Visa* fäller ut dem med *Använd X kr* per utgift. En utgift som Vakten redan visar som prisdrift tas inte med här.
+  - Varningarna finns kvar i API:t (`warnings`) och uppgifterna ligger bredvid (`tasks`), med ett id som är detsamma så länge saken är densamma.
+- **Kommande 14 dagar:** en tidslinje, en kolumn per dag från i dag.
+  - Den visar lönen och andra väntade inkomster (gröna), fasta utgifter som prickar med dagens summa (ifylld prick för bankkonto, ring för kort, grön när den är dragen) och kortfakturor som förfaller (röda, streckade när det är en uppskattning av nästa Mastercard-faktura).
+  - Schemadeadlinen syns som typen Jobb, en egen bricka "schema" i färgen för jobb med jobb i förklaringen. Klick på brickan bockar av schemat som mottaget, och ett nytt klick ångrar.
+  - Hovra eller fokusera en dag för att se namnen.
+  - Under tidslinjen finns en rad per konto, till exempel "e-sparkonto: 399 kr dras före lönen · 1 st · sedan 7 500 kr t.o.m. 2/10". Kort visas som "på kortet, betalas via fakturan". Klick fäller ut listan.
+- **Saldon:** ett kort per konto med belopp och "uppdaterat för N dagar sedan". Klick på beloppet redigerar det, med dagens datum.
+  - Kreditkort visar skulden, den senaste fakturan med status och nästa Mastercard-faktura (prognos).
+  - En meny på kortet har *Uppdatera skuld*, *Ny faktura…* (eller *Lägg in faktura för hand…* när fakturorna importeras) och *Markera fakturan betald* / *Ångra*.
+  - En kortfaktura räknas som betald när betalningarna till kortet, från dagen efter fakturaperioden till 3 dagar efter förfallodagen, når upp till skulden (1 kr marginal). Mastercard betalas ofta veckor före förfallodagen.
+  - **Nästa Mastercard-faktura (prognos)** gäller från dagen efter den senaste fakturan till den slutdag fakturan anger (annars ungefär den 5:e), och förfaller sista bankdagen i den månaden. Beloppet är köpen på kortet hittills i perioden plus kortets fasta utgifter som återstår fram till brytpunkten.
+- **Kvar vid månadsskiftet** (på svarskortet, under Nästa lön): kassaflödets saldo när månaden är slut, alltså när månadens lön, räkningar och kortfakturor är betalda och nästa månads inte är det. Till exempel "Kvar vid månadsskiftet 1/10 · 19 123 kr när septembers räkningar är betalda". `monthStart` i `GET /api/overview`.
+- **Ekonomisk situation:** en rad med Pengar totalt (bankkontona, värdepapperen och likviderna på ISK, som fliken inleds med) och bufferten i månader, med länk till fliken. Inget mer: ingen förändring sedan förra månaden, och enda färgen är på en buffert under 3 månader — ett läge, inte en rörelse.
+- **Fast i värdepapper** (hette *Sparande*): en rad under Saldon med värdet på värdepapperen på ISK, utan likviderna som ingår i Pengar nu. Den visar dagen kurserna är från och de två zonernas andelar, samt en länk till *Innehav* i Analys. Ingen förändring sedan i går, ingen pil och ingen färg — utom gult på bet-andelen när den är över policyns 25 %, vilket är ett policyläge och inte en marknadsrörelse.
+- **API-kostnader** (`GET /api/overview/api-costs`): ett kort längre ner på Översikten, före Veckan som gick. Det räknar det som ligger i kategorin *API* med underkategorier, och du styr vad som räknas genom att kategorisera. Prenumerationer som Claude.ai och ChatGPT ligger i *AI-tjänster* och räknas inte.
+  - Provider läses ur handlartexten: Anthropic, OpenAI, Google, Mistral, DeepSeek, OpenRouter, xAI med flera. En okänd provider får handlarens namn.
+  - Kostnaden räknas på köpdagen med hela beloppet, även om köpet är kopplat till en fast utgift. En återbetalning dras av, och av ett uppdelat köp räknas bara API-delen.
+  - Kortet visar den här månaden hittills, snittet per månad för de 11 hela månaderna före och summan för 12 månader.
+  - Under det finns en stapel per månad i 12 månader, uppdelad per provider. Klick på en stapel öppnar månadens API-rader. Under staplarna finns en tabell per provider med månaden och 12 månader, största först.
+  - Kortet visas inte om det inte finns någon kategori som heter API, eller om inget har kostat något.
+- **Den här månaden:** rörliga utgifter per huvudkategori, med en stapel och ett streck för snittet samma dagar de tre föregående månaderna, sorterade på belopp.
+  - Kategorier som är 0 både nu och i snitt ligger bakom *Visa alla*.
+  - Klick öppnar raderna i Transaktioner.
+- **Min del | Hushållet** gäller hela appen (Översikt och Analys) och minns sitt läge. *Min del* räknar delade köp till hälften, Mios köp inte alls och mina köp som hon betalat fullt. *Hushållet* räknar allt fullt.
+- **Engångsinkomst eller -utgift** registreras i en dialog från *Registrera* i sidhuvudet eller från kommandopaletten i vilken vy som helst, eventuellt med *uppdatera saldo*.
+- **Fasta utgifter per konto med status** (kommande, dragen, förfallen, passerad, markerad betald) finns i fliken Fasta utgifter, med status i listan och *Markera betald* i panelen.
+
+## Ekonomisk situation
+
+En balansräkning för din del, med månadsrytm — ingen dagsförändring och ingenting grönt eller rött för att det rört sig; bara skulder är röda.
+
+- **Pengar totalt** är den stora siffran: bankkontona, ISK:s värdepapper och likvider och andra likvida tillgångar, utan skulder och utan det partnern är skyldig. Under den står nettoförmögenheten exkl. och inkl. CSN på en rad.
+- **Framåt** (`ahead` i `GET /api/networth`) visar hur Pengar totalt ändras fram till dagen före lönen efter nästa lön, eller 30 dagar framåt utan lön att gå efter. Det räknas med samma händelser som Kassaflöde: lönen, Mios betalningar, kortfakturorna, hyran och de andra fasta utgifterna från banken, och det som är planerat. Det visas som en uträkning: I dag + det som kommer in − det som dras (+ planerat i en egen ruta) = *Efter lön och räkningar*, där varje term summeras från listans poster. Under uträkningen visas upp till tre viktiga dagar: dagen då mest dras, lönedagen och dagen då näst mest dras. Listan med en rad per dag och saldot efter dagen är hopfälld tills man väljer *Visa alla N dagar med händelser*. Rörliga utgifter är inte med, och det står under kortet.
+
+- **Tillgångar:** varje bankkonto vars saldo följs, ISK:s värdepapper och likvider var för sig, och det partnern är skyldig dig. Är skulden åt andra hållet blir den en skuld, inte en negativ tillgång.
+- **Skulder:** per kreditkort, obetald faktura plus köp sedan fakturaperiodens slut (på kortets bokföringsdag). Finns varken faktura eller betalning att räkna från visas *okänd*, inte noll. Varje kortrad visar också hur skulden fördelar sig på de månader den betalas (`payments` på raden): "betalas i september 6 514 kr (25/9) · i oktober 3 076 kr (25/10)", med en stapel för andelarna. Den obetalda fakturan betalas på sin betaldag (Mastercard den 25:e). Varje köp efter den betalas med fakturan som köpets bokföringsdag hamnar på, på samma sätt som i Kassaflöde.
+- **Bufferten** i Uthållighet, på Översiktens rad och i Vaktens *buffer_low* är **Kvar vid månadsskiftet** (kassaflödets saldo när månadens räkningar är betalda, med likviderna på ISK), inte buffertkontots saldo i dag. Dagen före lönen är kontot som tommast, och det säger inget om vad som är över. Formeln lyder till exempel "kvar vid månadsskiftet 1/10 19 123 kr (varav 4 260 kr på ISK) ÷ 26 510 kr/mån". Utan prognos används buffertkontot och likviderna som förut.
+- **Studielånet står för sig** och visas alltid i båda summorna: nettoförmögenhet **exkl.** CSN och **inkl.** CSN.
+- **Växeln *visa illikvida*** lägger till bilen på egen rad och räknar in den i Pengar totalt och i de två nettosummorna. Prylar räknas inte.
+- **Hålls för hand:** CSN och bilen som ett belopp med dagen det gällde. CSN räknas ned automatiskt av sin egen månadsdragning; en korrigering flyttar beloppet och dagen ihop.
+
+
+## Kassaflöde 90 dagar
+
+Fliken *Kassaflöde 90 dagar* under Översikt (`/?flik=kassaflode`) följer Privatkonto och e-sparkonto (bankkontona vars saldo följs) och likviderna på Avanza dag för dag 90 dagar framåt, från dagens saldon.
+
+- **Likviderna på Avanza** räknas som pengar att använda, eftersom de kan föras över vilken dag som helst: senast inlagda likvidsaldo per konto plus det som förts över till Avanza (Sparande, netto) efter den dagen. En överföring till Avanza stannar alltså i samma pott och sänker inte *safe to spend*. Utan inlagt likvidsaldo räknas ingenting. *I dag* visar delarna ("bank … + Avanza …"). Bufferten i Uthållighet räknar likviderna på samma sätt.
+
+- **In:**
+  - Återkommande inkomster på sin dag, med månadens förväntade belopp och annars uppskattningen. En inkomst som redan kommit räknas inte, och en lön som är upp till 5 dagar sen väntas i dag. Undantaget är en inkomst som är bokförd före sin transaktionsdag. Swedbank bokför lönen dagen före lönedagen, med lönedagen som transaktionsdag, och det disponibla saldot får den först då. Om kontots saldo är från före transaktionsdagen räknas inkomsten in på transaktionsdagen med det bokförda beloppet: "Lön (bokförd 24/9, i saldot 25/9)". Den räknas in i dag om saldot inte har uppdaterats sedan dess. När saldot är från transaktionsdagen eller senare är inkomsten redan med i det.
+  - En inkomst som kommer med en annan banktext (en lön som kom som "SWED2609240EXEMPEL" i stället för "Lön") kopplas ändå om den kommer till rätt konto inom ±5 dagar från sin dag, månaden inte redan har den, och beloppet ligger inom 1 % av vad månaden väntade: Löneprognosens netto för lönen, månadens eget belopp eller det vanliga beloppet. Annars skulle den räknas en gång till som kommande.
+  - Det Mio swishar (*Från Mio*, uppskattat) den 25:e. Den här månaden är det vad Delad ekonomi säger att hon är skyldig nu, senare månader snittet av de tre senaste hela månadernas pengar mellan oss. Rutan *Räkna med betalningar från Mio* stänger av det (minns sitt läge).
+- **Ut:**
+  - Fasta utgifter på bankkontona enligt schemat, om de inte redan dragits.
+  - Kortfakturor på sin betaldag:
+    - en importerad obetald faktura, med exakt belopp;
+    - Mastercards nästa faktura och fakturorna efter den (betalda den 25:e i förfallomånaden, eller på förfallodagen om den är tidigare; betalas de tidigare syns betalningen och fakturan är betald), och Bank Norwegian per period (betald den 25:e): köpt hittills i perioden, plus kortets fasta utgifter som återstår, plus kortets andel av den rörliga takten för resten av perioden. Den sista delen visas som "varav ca … kr kommande köp". Det som redan betalats till kortet från ett bankkonto sedan perioden stängde dras av, eftersom det redan har lämnat saldot. En faktura som betalas på morgonen på betaldagen räknas alltså inte en gång till.
+  - Rörliga utgifter enligt takten de senaste 30 dagarna, räknad på **det du betalat**: egna och delade köp fullt, Mios köp från hennes konton inte alls. Hennes halva av det delade kommer tillbaka med hennes betalningar, så *min del* här skulle dra av den två gånger.
+    - Takten delas upp på kontot köpen betalades med. Kortens andel (Norwegian och Mastercard, när deras fakturacykel är känd) följer med respektive faktura. Bara bankens andel dras varje dag från i morgon. Rutan *Rörligt* visas inte längre (2026-09-24), och takten syns bara i diagrammet och på fakturornas "varav ca … kr kommande köp".
+    - Fasta utgifter på ett kort räknas en gång, i fakturan, eftersom deras dragningar är kopplade och aldrig ingår i takten.
+  - Bränsle enligt Pendling & bränsles månadsprognos (resten av den här månaden, sedan hela månader med månadens pass eller den här månadens), när det finns en. Då tas tankningarna bort ur takten.
+  - **Räkna bara med mat på kortet** (en ruta under *Rörligt*, som sparas i inställningen `cashflow_food_only`, `PUT /api/cashflow/settings {foodOnly}`): takten räknas bara på maten, alltså huvudkategorin Mat som Livsmedel ligger under, som köps på korten och betalas med kortfakturan. Mat som köps med bankkortet räknas inte, eftersom den varierar för mycket. Från banken dras bara bränslet dag för dag, enligt prognosen eller, utan prognos, ur takten. Hyran, de fasta utgifterna, kortfakturorna och det planerade påverkas inte. Valet är en switch bredvid *Räkna med betalningar från Mio*, under siffrorna. Har jag råd? och Kopiera läget säger när läget är på.
+  - Planerade utgifter och inkomster. En planerad utgift betalas med bankkontot på sin dag, eller med ett kort. Ett kortköp dras på betaldagen för fakturan det hamnar på: Norwegian efter fakturaperioden (bokföringsdagen, köpdagen + 1), Mastercard med nästa faktura och en cykel per månad efter den. Ett delat köp ger *Från Mio: halva …* (uppskattad) den första 25:e på eller efter betaldagen.
+- **Diagram:** saldot som yta, med lönedagarna, i dag, den lägsta punkten i en pratbubbla, de största fallen (högst fyra, över 5 000 kr på en dag) och bufferten när den är större än 0. Se *Design v2: Kassaflöde 90 dagar* i `UI-SPEC.md`.
+- **Safe to spend** = lägsta punkten − bufferten. Bufferten ställs in under Inställningar › Kassaflöde, standard 2 000 kr. Samma kort har gränsen för *Har jag råd?*: ett köp blir rött när pengarna räcker färre månader än gränsen med sparandet efter köpet, standard 3.
+- **Har jag råd?** (ersätter Scenario, och finns i ⌘K som *Har jag råd?*, som fokuserar beloppet): Utgift/Inkomst, belopp, datum och beskrivning läggs på som en streckad linje med sin egen lägsta punkt och safe to spend. *Spara som planerad* sparar det i `planned_items`, och det räknas sedan in tills dagen passerat.
+  - För en utgift finns också *Pengarna tas från*: kassaflödet eller sparandet på ISK. Så fort belopp och datum finns visas svaret från `GET /api/afford` (300 ms efter sista tangenten), innan man sparar, som en mening: Ja (lägsta punkten före och efter, och saldot dag 90), Knappt (under bufferten) eller Nej (under noll). När något annat avgör står serverns skäl i meningen. Under *Visa uträkningen* står rubriken ("Nej, inte från kassaflödet"), skälen och en tabell utan och med köpet: Kvar vid månadsskiftet för de två första månader köpet påverkar, lägsta punkt, safe to spend, uthållighet med sparandet och buffert (månader). Ett av skälen är "Kvar vid månadsskiftet 1/11 blir … (utan köpet …)".
+  - När det är rött från kassaflödet men gult från ISK finns knappen *Räkna med pengar från ISK*.
+  - Tas pengarna från ISK påverkar köpet inte kassaflödet, bara Mios halva som kommer tillbaka. Sparas det som planerat läggs också *Från ISK: …* in som en planerad inkomst på betaldagen.
+  - **Kopiera läget** (`GET /api/afford/snapshot`, samma parametrar som `/api/afford` när ett köp är ifyllt): läget som kort markdown att klistra in i en Claude-chatt, med köpet, domen och skälen när det finns ett köp. Texten visas först och kopieras med *Kopiera*.
+    - Först står **Så räknar jag**: det som finns kvar den 1:a, när förra månadens räkningar är betalda med månadens lön och partnerns swish, är det som är över. Kortfakturorna hör till nästa månads lön och betalas runt den 25:e. Ett kortköp dras först på fakturans betaldag.
+    - Med: Kvar vid månadsskiftet för varje månad i prognosen (med och utan köpet), saldon, likvider och sparande på ISK, kortskulder med nästa faktura, vad partnern är skyldig, CSN-skulden, inkomster 90 dagar framåt (märkta prognos, uppskattning eller väntad), utgifter per månad, sparkvot, kassaflödets lägsta punkt och safe to spend, uthållighet och den röda gränsen.
+    - Utan: namn (Mio heter "partnern"), konto- och kortnummer, arbetsgivare (lönen heter "lön", andra inkomster "annan inkomst"), hyresvärd, adress, enskilda köp, handlare och innehav.
+    - Beloppen är avrundade till hundratal kronor.
+  - En utgift har också *Betalas med* (bankkontot eller ett kort) och *Delat med Mio*. Under formuläret står till exempel "köpt 24/9 på Bank Norwegian, dras 25/10 · delat, Mios halva 4 000 kr tillbaka 25/10", och den streckade linjen följer det. Samma rad står under en sparad planerad post. En inkomst kan inte vara delad eller komma på ett kort.
+- **Dag för dag:** dagar med händelser med saldot efter dagen, och den lägsta dagen även utan händelser. En växel väljer *Till nästa lön* (förval: till och med lönen och räkningarna den betalar inom en vecka), *30 dagar* eller *90 dagar*, och *Visa alla 90 dagar* står sist när inte alla visas.
+- **API:** `GET /api/cashflow` (`?partner=0`, `?today=`), `GET/PUT /api/cashflow/settings` `{buffer}`, `POST /api/cashflow/planned` (`{date, amount, description, accountId?, shared?}`), `DELETE /api/cashflow/planned/:id`, `GET /api/cashflow/pay-day?date=&amount=&accountId=&shared=1` (när ett köp dras och när halvan kommer tillbaka).
+
+## Veckodigest
+
+Söndagar 19:00 (Europe/Stockholm, node-cron, bara den riktiga instansen och bara med `NTFY_TOPIC`) skickas veckan som gick som en ntfy-notis i Markdown. Samma text visas som blocket *Veckan som gick* längst ned i Översikten, för den senaste hela veckan (måndag–söndag).
+
+- Rubrik: "Veckan som gick (14–20/9)". Högst 8 rader:
+  - rörliga utgifter (min del) mot snittet de 8 veckorna före, med skillnad i procent;
+  - de tre största köpen (hela beloppet);
+  - nästa veckas dragningar (fasta utgifter på alla konton och kortfakturor som förfaller, från i dag) med antal och summa, och på en rad under de fyra första;
+  - antal att granska;
+  - safe to spend från Kassaflöde, med den lägsta punkten.
+- **Inställningar › Veckodigest:** *Skicka nu* för att prova, och när den senast skickades (`settings.digest_sent`).
+- **API:** `GET /api/digest` (`?today=`), `POST /api/digest/send` (400 utan topic).
+
+## Vakt
+
+Efter varje synk och import (inte förhandsgranskningar) letar Vakten efter det som ser fel ut. Fynden blir poster i Översiktens Att göra, och de nya i en körning skickas som **en** ntfy-notis (rubrik och högst 8 rader, bara från den riktiga instansen). Köp tittas på de senaste 30 dagarna. Ett köp är pengar ut som inte är en överföring, sparande, pengar mellan oss, ett returnerat köp eller Mios egen betalning.
+
+| Fynd | När | Knapp |
+|---|---|---|
+| Prisdrift | En fast utgift, eller en handlare som drar som ett abonnemang (tre tidigare dragningar med 20–40 dagars mellanrum och samma pris ±3 %), vars senaste dragning avviker mer än 3 % från medianen av de tre före. En fast utgift vars belopp redan är det nya frågas inte om. | *Acceptera nytt belopp*: det nya beloppet blir seriens pris framöver. För en fast utgift blir det också utgiftens belopp. *Varierar – fråga inte*: seriens pris bevakas inte längre. |
+| Dubbeldebitering | Samma konto, handlare och belopp inom 2 dagar. | *Behåll båda* (tar också bort paret ur möjliga dubbletter), *Visa* |
+| Ovanligt belopp | Ett rörligt köp över 500 kr och över 3 × medianen för köp i kategorin de 6 månaderna före (minst 5 köp). | *Visa* |
+| Ny handlare | Första köpet någonsin hos en handlare, över 300 kr. | *Visa* |
+| Utebliven dragning | En fast utgift (med konto, mönster och dag) vars dag passerat med 3 dagar utan dragning, när kontots data når så långt (senaste rad, import eller synk). Förra och den här månaden. | *Markera betald*, *Drogs inte (pausad)* (månadsvisa) |
+| Abonnemang som inte dras | En fast utgift utan dragning två perioder i rad efter den senaste. Ersätter de missade månadernas poster. | *Pausa* |
+| Bet-zonen över 25 % | Bet-zonens andel av det värderade innehavet är över 25 %. Nyckeln bär månaden, så den sägs en gång i månaden — inte en gång per synk. | *Visa innehaven* |
+| Kurser hämtas inte | Ingen kurs har **hämtats** på 3 dagar (fredagens kurs på en måndag är inte gammal; en hämtning som misslyckas är det). Nyckeln bär dagen för senaste lyckade hämtning. Kommer de andra kurserna men ett enskilt instrument har fastnat, blir det ett fynd för just det instrumentet (nyckeln bär instrumentet och dagen). | *Hämta nu*, *Visa innehaven* |
+| Valutakurs saknas | Ett innehav kan inte värderas för att dess valutakurs aldrig kom. En rad per valutapar, med vilka innehav det gäller. | *Visa innehaven* |
+| Bevakad dragning snart | En fast utgift (inte årsvis) med *Säg till innan den dras*, vars nästa dragning är inom `remind_days` dagar (3 som standard, 0 = aldrig) och inte redan dragen eller markerad. | *Pausa* (uppsagd), *Behåll* (frågan kommer igen inför nästa dragning) |
+| Bufferten under 3 månader | Buffertkontot och likviderna på Avanza räcker mindre än 3 månaders utgifter (min del). Nyckeln bär månaden, så den sägs en gång i månaden. | *Visa situationen* |
+| Pensionsvärden äldre än 12 mån | Ett pensionsvärde är över ett år gammalt. Ett fynd per post, nyckeln bär värdedatumet, så ett nytt värde släcker det. | *Visa pensionen* |
+
+- **En utebliven dragning på en utgift som betalar ned en manuell skuld** (CSN) säger också konsekvensen: *"… men syns inte. CSN-saldot räknas inte ned förrän den syns"*. Ingen egen fyndtyp för det — en sak att rätta, en uppgift.
+- **Handlaren** är Swish-numret eller textens första två ord med bokstäver (`GOOGLE*CLOUD KLM` och `GOOGLE*CLOUD PQR` är samma).
+- **Avfärdat kommer inte tillbaka.** Varje fynd har en stabil nyckel, till exempel `double_charge:12:15` eller `missed_charge:8:2026-09`. En ny dragning till nytt pris är ett nytt fynd.
+- **Inställningar › Vakt** slår av och på varje typ och listar serier vars pris inte bevakas, med *Bevaka igen*. Serierna ligger i `settings` under `watch_muted_series`.
+- **Datamodell:** `watch_findings` (`key`, `kind`, `series`, accepterat `amount`/`date`, `first_seen_at`, `dismissed_at`, `accepted_at`). Fynden räknas fram ur datan varje gång; tabellen minns bara vad som notifierats, avfärdats och accepterats. Vilka typer som är på ligger i `settings` under `watch_kinds`.
+- **API:** `GET /api/watch`, `GET/PUT /api/watch/settings`, `POST /api/watch/dismiss|restore|accept|mute` med `{key}` och `POST /api/watch/unmute` med `{series}`.
+
+## Delad ekonomi
+
+- **Månad = betalningsdag**, alltså när pengarna lämnar mitt konto:
+  - *Norwegian-köp* räknas när fakturan de ligger på betalas. Fakturan väljs efter `posted_date` (eller köpdag + 1), och perioden går 16:e–15:e, eller enligt en importerad PDF. Betalningsdagen är den faktiska betalningen till kortet inom 25 dagar, annars den 25:e (aldrig efter förfallodagen).
+  - *Fasta utgifter* räknas på dragningsdagen (bokföringsdagen), eller det förväntade beloppet om ingen dragning finns. Ligger utgiften på Norwegian-kortet räknas den när fakturan betalas. En dragning som kommer några dagar före sin period (TV-paketet, årsvis 1/10, dragen 28/9) räknas också i månaden pengarna gick ut, och ingen förväntad dragning läggs in för perioden.
+  - *Mastercard-köp* räknas från den 1 oktober 2026 när fakturan betalas, som Norwegians: den 25:e i månaden efter köpet, i en egen grupp "Swedbank Mastercard Guld · faktura betalas 25/10, köp t.o.m. 7/10". Köp före oktober räknas som förut på köpdagen, så att redan avstämda månader inte ändras (`MASTERCARD_SHARED_FROM`).
+  - *Swedbank-rader, manuella rader och Swish* räknas på bokföringsdagen.
+- **Resultat** = ingående + (delat jag betalat − delat Mio betalat) / 2 + hennes köp som jag betalat − mina köp som hon betalat − (från Mio − till Mio). Positivt betyder att Mio betalar mig.
+  - Ingående = förra månadens resultat från och med startmånaden: det låsta resultatet om månaden är avstämd (0 om den stämdes av som kvitt), annars det aktuella.
+  - Resultatet för **hela månaden** visas med uträkningen rad för rad. Så länge räkningar återstår är rubriken *Att betala den 25/9*, efter fakturans betalningsdag. Rader som inte betalats än visas som *betalas 25/9*.
+- **Stäm av** låser hela månaden med en anteckning, på ett av två sätt:
+  - *Vi är kvitt*: skillnaden är reglerad eller avskriven, och nästa månad börjar på 0.
+  - *För över*: resultatet blir ingående belopp nästa månad.
+
+  Senare ändringar visas som *avviker*. *Lås upp* tar bort låsningen.
+- **Mio har betalat:** manuella rader (`paid_by = partner`, inget konto). De är delade eller *bara mitt*, och påverkar aldrig mina saldon eller min prognos.
+- **Räkna inte** på en Swish mellan er (`settlement_excluded`): Swishen ligger kvar men ingår inte i resultatet. Det gäller en Swish som reglerade något för sig, t.ex. din halva av ett delat köp som Mio betalade på sitt kort. Alternativet är att lägga in köpet under *Mio har betalat*, så att det också syns i hushållets statistik.
+- **Vad gällde Swishen?** Förslag på egna köp runt varje Swish från Mio: ungefär samma belopp betyder troligen hennes, ungefär dubbla betyder troligen delat.
+- **Notiser:** månader som inte är fullständigt importerade, möjlig dubbelräkning av en fast utgift på kortet som saknar matchningstext, och av en fast utgift som dragits från ett annat konto än det den väntas på (kortbyte utan sparat tidigare konto).
+- **Vyn:**
+  - Månaden väljs i sidhuvudet (←/→, T) och står i URL:en (`?manad=2026-08`).
+  - **Resultatkortet** (sedan 2026-09-25 i Design v2; se *Design v2: Delad ekonomi* i `UI-SPEC.md`) visar dig och Mio som avatarer med det var och en lagt ut (det delade), och mellan er "Mio ska betala dig" / "Du ska betala Mio" med beloppet stort och en grön pil mot den som får pengarna. Vid 0 kr finns ingen pil, och kortet säger "ni är kvitt". En pill säger hur månaden står: *öppen*, *avstämd, kvitt*, *förd över* eller *avviker*. Under finns *Stäm av* eller *Lås upp*. Din initial kommer från *Ditt namn* i Inställningar, annars J.
+  - Bredvid visas uträkningen som ett kvitto med ett tecken per rad, och *avstämt · nu* när den avviker.
+  - **De senaste sex månaderna** från startmånaden visas som kort med resultat och samma status som resultatkortet. Klick går dit. På samma rad står "Löpande saldo räknas från <månad> · ändra", där *ändra* öppnar startmånadens fält.
+  - *Delat som jag betalat* och *Mio har betalat* (med *Överföringar mellan oss* under) står i två kolumner, som kort. Grupperna fälls ut, och raderna har kategori. Notiserna om import har *Importera ›* som leder till Importer.
+  - **Mio har betalat** läggs in i en sidopanel (N).
+  - **Kopiera sammanfattning** lägger en kort text i urklipp att skicka till Mio, till exempel "September: Norwegian 6 514 + fasta 9 155 = 15 668 delat, hälften 7 834. Jag har swishat dig 100 kr. Du swishar 7 934 kr." Den bygger på de avstämda siffrorna när månaden är låst.
+
+## Pendling & bränsle
+
+Förutsäger månadens bränslekostnad utifrån antalet arbetspass, och räknar in den i Översiktens prognos. Vyn `/pendling` (Pendling & bränsle i menyn) följer *Design v2: Pendling & bränsle* i `UI-SPEC.md`: en hero med kvar att tanka och en tankmätare bredvid reseavdraget, pass per månad som staplar och tabell, och kvittona bredvid mätarställningen.
+
+- **Inställningar › Bil:**
+  - Sträcka per pass (40 km, tur och retur), övrig körning per månad (200 km) och förbrukning som tabellvärde (6,5 l/100 km); startvärden som ändras under Inställningar › Bil. Tabellvärdet ersätts av det kalibrerade värdet när ett sådant finns, om inte det stängs av.
+  - Trängselskatt per pass (0 kr) läggs till kostnaden per pass.
+  - Vilken kategori som är tankning: Bil › Drivmedel om inget annat väljs.
+  - Literpris för diesel skrivs in med datum. Det senast angivna priset visas med sin ålder, i amber efter 30 dagar.
+- **Pass per månad:** en rad per månad, från tre månader fram (lika långt som Kassaflöde 90 dagar räcker) till ett år bakåt. En månad utan pass lånar den här månadens antal i prognoserna. Där skrivs antalet pass in, och raden visar km, beräknad kostnad, tankat och l/100 km. Tabellen och staplarna visar ett år bakåt till i dag, äldst först; de kommande månaderna fälls ut under den aktuella. Dagarna kan också kryssas i en liten kalender, och då blir antalet pass antalet markerade dagar.
+- **Tankat** är rader i tankningskategorin per köpdag (`transaction_date`, annars bokföringsdagen), utan borttagna och returnerade. Rader med ordet "resa" i namnet eller anteckningen räknas inte och visas som resor. Tankningar i kategorin Resor ingår inte, eftersom de inte ligger i tankningskategorin.
+- **Prognos för månaden:** km = pass × sträcka + övrig körning. Beräknat = km × förbrukning / 100 × literpris (det senaste priset fram till i dag). Kvar att tanka = beräknat − tankat hittills, minst 0. Kr per pass = sträcka × förbrukning / 100 × literpris + trängselskatt.
+- **I Översikten** dras *kvar att tanka* av i "kvar att leva på", tillsammans med månadens trängselskatt, som en egen rad i uträkningen. Ligger lönen i nästa månad räknas också nästa månads kostnad fram till lönedagen in, efter antal dagar. Då används nästa månads pass, eller den här månadens om de inte är ifyllda, och raden markeras som uppskattad. Saknas månadens pass blir det en uppgift i Att göra, när modulen väl används.
+- **Liter:** varje tankning räknas om till liter med priset som gällde den dagen (det senaste som angetts på eller före). Månadens pris är snittet som betalats. Finns bara ett senare pris räknas det med det, men månaden markeras (priset och l/100 km i orange, "från 19/9").
+- **Kalibrering:** för de senaste tre avslutade månaderna (inom ett halvår) med pass, tankningar och ett pris angivet senast samma dag som tankningarna: alla liter delat med km enligt modellen. Månader med bara ett senare pris räknas inte, och då gäller tabellvärdet. Varje månads eget värde visas som spridning, till exempel "Kalibrerat: 6,4 l/100 km (maj–juli, 4,6–11,2), tabellvärde 5,7".
+- **Mätarställning:** avläsningar med datum. Den första och den sista jämförs med modellens km för samma sträcka, där delar av månader räknas efter antal dagar. Saknas pass för någon månad listas de. Skiljer det mer än 10 % föreslås en ny *övrig körning* (avrundad till 10 km) med *Använd*.
+- **Reseavdrag** per inkomstår (resor till och från arbetet med egen bil):
+  - Avdraget = pass × sträckan per pass i mil (Bil: 40 km = 4,0 mil) × schablonen (25 kr/mil) − årets tröskel (11 000 kr för 2025, 15 000 kr för 2026). Ett år utan egen tröskel använder det senaste tidigare årets.
+  - Visas löpande för året ("avdragsgillt 2026 hittills"), med uträkningen och den uppskattade skatteeffekten (avdraget × marginalskatten, standard 32 %). Under tröskeln visas hur många pass som behövs.
+  - Villkoren står under: minst 5 km enkel väg (kontrolleras mot sträckan) och minst 2 timmars tidsvinst per dag mot kollektivtrafik (kontrolleras av användaren).
+  - Passen per månad (och markerade dagar) listas per år som underlag (*Underlag per månad ›*, utfällt i kortet), med CSV. En tröskelstapel visar hur mycket av beloppet tröskeln tar.
+  - Schablon, marginalskatt och trösklar ändras i avsnittet (*Ändra*). De sparas i `settings` under `commute_deduction`.
+- API: `GET /api/fuel` (allt vyn behöver), `GET /api/fuel/history?from=&to=` (Analys), `PUT /api/fuel/settings`, `PUT /api/fuel/shifts/:month`, `GET|PUT /api/fuel/shift-days/…`, `POST|DELETE /api/fuel/prices`, `POST|DELETE /api/fuel/odometer`, `GET /api/fuel/deduction`, `PUT /api/fuel/deduction/settings`.
+
+## Lön (löneprognos)
+
+Vyn `/lon` (Lön i menyn): timmarna för en arbetsmånad in, vad som landar på kontot och när ut. Konstanterna läses från lönespecarna under Inställningar › Lön.
+
+- **Vyn** (Design v2, se `UI-SPEC.md`): överst nästa lön, alltså prognosen för den arbetsmånad nästa lön gäller, med timmarna mot mått och heltid och två rutor: senast utbetalt och snitt 12 mån. Bredvid den *Semester kvar till 31 mars*. Under dem formuläret *Lägg in arbetsmånad*, som börjar på den första månaden som saknas och vars prognos visas i heron medan den skrivs, och *Inlagda månader* med utfallet mot prognosen och lönespecen för varje månad.
+
+- **Lönespecar:** Specar från Hogia, som webbspec sparad som `.htm` eller som PDF:en som mejlas ut (samma rader, läses av samma kod). *Läs in specar* under Inställningar › Lön. Lönearterna (011 månadslön, 01d och 02f tillägg, 160 mertid, 164 övertidstillägg, 15x OB, 205 semestertimlön, atb ATF …) är de som specen använder; en arbetsgivare med andra koder får inte specen läst. Utan spec läggs konstanterna in för hand. Två påhittade specar finns i `server/test/fixtures/payslips/`.
+  - **Läses:** utbetalningsdag, "Grundlön avser", varje löneart (kod, text, period, infokolumnen, antal, à-pris, belopp), bruttolön, skatt och vad den beräknades på, nettolön, periodvärden och årsvärden (brutto, skatt, netto, tjänstgjorda timmar, semestergrundande inkomst, friskvård), semestertimlön, semestersaldot (intjänad, uttag och kvar för semesteråret, och sparad semester kvar), ATF-saldo, skattetabell och kolumn, kategori och lönegrupp.
+  - **Sparas aldrig:** namn, adress, anställningsnummer eller personnummer (specarna har inget). Kontonumret sparas bara maskerat.
+  - **Tabeller:** `payslips` och `payslip_lines`. En spec läses in en gång (unik på utbetalningsdag och sha256). En spec som lästes in innan semestersaldot lästes kompletteras med det när den läses in igen ("kompletterad med semestersaldot"); inget annat på den ändras.
+- **Konstanter** (`salary_constants`) gäller från en arbetsmånad. En ny rad läggs till när en spec visar något nytt, till exempel revisionen 1 juni. Varje värde har sin källa ("från julispec 2026") och kan ändras för hand ("ändrat för hand", och det behålls när specar läses in igen). Ändras månadslönen, ett tillägg eller måttet för hand räknas mertidens à-pris om till (011 + 01d + 02f) ÷ måttet, avrundat nedåt till öret som Hogias ("räknat: (011 + 01d + 02f) ÷ måttet"), utom när à-priset anges eller själv ändrats för hand. Värdena:
+  - månadslön (011), fast tillägg (01d) och lönetillägg (02f eller 022);
+  - mertidens à-pris (160), som står på specen;
+  - månadsarbetstidsmåttet, som räknas fram: (011 + 01d + 02f) ÷ à-priset, avrundat till tiondel (140,0);
+  - heltid (standard 173,3 timmar; står inte på specen och ändras per revision i tabellen);
+  - semestertimlön;
+  - sysselsättningsgrad (mått ÷ heltid) och grundtimlön (månadslön ÷ mått), som räknas fram.
+  - OB-à-priser per nivå för arbetsmånaden: nivåerna (löneart 15x, namn och à-pris från en arbetsmånad) läggs in under Inställningar › Lön › Avtalet (`settings.salary_settings.obLevels`, tomt från början); det senaste beloppet gäller tills nästa läggs in. Har en spec visat nivån för en månad under samma belopp gäller specens pris (`settings.salary_ob_rates`, med arbetsmånaden), och en nivå som bara en spec har behåller sitt pris.
+- **Avtalet** (Inställningar › Lön › Avtalet, `settings.salary_settings`): det som skiljer mellan avtal och inte står på specen. Allt är tomt eller av från början, och en del som inte är ifylld räknas inte med: `obLevels` (se ovan), `shiftLimit` och `weekLimit` (timmar över dem per pass eller vecka är övertid; tomt = ingen sådan regel), `quarterOvertime` (övertid när kvartalets timmar passerar heltid i snitt) och `scheduleNoticeDays` (hur många dagar före en månad schemat ska vara klart; tomt = ingen schemadeadline i kalendrarna och Kommande 14 dagar). `PUT /api/salary/settings` tar dem.
+- **Eftersläpning** (`settings.salary_settings.lagMonths`): läses från radernas period mot utbetalningsdagen. Det går att sätta för hand. Utbetalning den 25:e månaden efter arbetsmånaden, eller bankdagen före.
+- **Modellen** per arbetsmånad (`salary_months`: timmar totalt, varav semester, ATF-uttag, varav övertid per pass/vecka, OB-timmar per nivå):
+  - månadslön + fast tillägg + lönetillägg;
+  - mertid = alla timmar över måttet × à-priset;
+  - övertid är, enligt Avtalet-inställningarna, tid över gränsen per pass eller per vecka, eller över heltid per månad *i genomsnitt under ett kalenderkvartal* (regeln för kvartalet är en inställning). En övertidstimme betalas som mertid plus övertidstillägget 164 = à-priset ÷ 2, alltså 50 % ovanpå, som specen för juli 2026 betalade en timme över gränsen per pass (1 tim à 100,02);
+  - övertidstillägg per pass/vecka (164) = timmar × à-priset ÷ 2 (timmarna skrivs in, eller räknas ur de markerade arbetsdagarna när gränserna är satta);
+  - övertidstillägg för kvartalet (bara när kvartalsregeln är på; 164, antagen regel) = (kvartalets timmar − 3 × heltid − kvartalets timmar över per pass/vecka) × à-priset ÷ 2, i kvartalets sista månad. Kvartalets månader räknas som de är inlagda under Lön (den som räknas som den skrivs in), en månad som inte är inlagd som måttet (140). Att det regleras med kvartalets sista månad är antaget tills en spec visar det;
+  - semestertimmar: grundtimlönen dras av och semestertimlönen läggs till;
+  - ATF-uttag × grundtimlön;
+  - OB × nivåns à-pris;
+  - outtagen semester (`semut`, antagen regel) i marsmånaden, se *Semester kvar* nedan.
+  - Regler som inte synts på någon spec med månadslön märks "antagen regel". Ett kvartal över heltid i snitt flaggas i alla dess månader, med kvartalets timmar per månad, timmarna över och vad en timme är värd före och efter. Annars visas vad nästa timme ger och vid hur många timmar i månaden kvartalet passerar.
+- **Skatt:** Skatteverkets tabell (öppna data, "Skattetabeller för månadslön"), hämtad med *Hämta tabell* och sparad i `tax_table_rows`. Den läses vid bruttolönen i hela kronor. Tabell och kolumn (32, 1) och tabellår (standard: utbetalningsårets, annars det senaste hämtade) är inställningar. Utan tabell används en kurva från specarna: effektiv skatt mot brutto, interpolerad mellan punkterna. Antal punkter och spann visas.
+- **Backtest** i Inställningar › Lön: modellen körs mot varje spec med specens egna timmar och konstanterna för arbetsmånaden. Tabellen visar faktiskt och modellerat netto, avvikelsen och en förklaring över 200 kr (friskvårdsutlägg med mera). Skatten jämförs med tabellen på varje spec, också timlönespecarna.
+- **API:** `GET /api/salary` (också `average`: snittet av de tolv senaste lönerna som kommit in, netto från banken och brutto från specen för samma utbetalningsmånad eller annars prognosen), `POST /api/salary/payslips`, `PUT /api/salary/settings` (också `vacationSave`), `PUT /api/salary/constants/:id`, `POST /api/salary/tax-table` `{year}`, `POST /api/salary/model`, `GET /api/salary/months`, `PUT|DELETE /api/salary/months/:month`.
+- **Timmar från passen:** per månad kan timmarna räknas från passen i Pendling & bränsle (pass × timmar per pass, 10,5 som standard, under Inställningar › Lön) i stället för att skrivas in. Utan pass för månaden används de inskrivna timmarna.
+  - Är arbetsdagarna markerade i Pendlings kalender räknas också *varav övertid pass/vecka* fram. Det är timmar över gränsen per pass plus timmar över gränsen per vecka (måndag–söndag, passen räknade till högst gränsen per pass), och vyn visar vilka veckor. Är ingen gräns satt räknas inget fram och de inskrivna timmarna gäller. En vecka över ett månadsskifte hör till månaden där veckans torsdag ligger.
+- **Semester kvar till 31 mars:** semesteråret går 1/4–31/3. Timmar som varken tagits ut eller sparats vid årets slut betalas ut i pengar (lönekontoret; står inte uttryckligen i avtalet).
+  - Timmarna = *Kvarv* på den senaste spec som har saldot − semestertimmarna inlagda under Lön för månaderna efter specens arbetsmånad till och med mars − timmarna att spara (`settings.salary_settings.vacationSave`, per semesterårets marsmånad).
+  - Beloppet = timmarna × semestertimlönen för mars. Det antas betalas med lönen för mars (aprillönen, den 25:e eller bankdagen före) och beskattas med tabellen på hela månadens brutto. Båda är antaganden tills en spec visar det, och raden märks "antagen regel".
+  - Utan inlagda timmar för mars räknas en vanlig månad (måttet, till exempel 140 tim) plus utbetalningen, så att den syns i Kassaflöde och *Nästa lön* ("prognos, vanlig månad + outtagen semester").
+  - Lön visar rutan *Semester kvar till 31 mars* med uträkningen och fältet *Spara till nästa semesterår*. Sparad semester från tidigare år visas men betalas inte ut.
+  - När specen som betalar mars har kommit finns inget kvar att räkna fram.
+- **I resten av verktyget:**
+  - En månad med timmar ger lönen för sin utbetalningsmånad: nettot och utbetalningsdagen ersätter uppskattningen (och ett eget förväntat belopp) i Översiktens *Nästa lön*, i tidslinjen och i "kvar att leva på"-perioden. Raden visar "löneprognos, 145 tim", och *timmar* öppnar Lön.
+  - Kassaflöde 90 dagar använder prognosen för varje månad med timmar. Övriga månader är uppskattningen och märks som uppskattade.
+  - När lönen kommit in visas utfallet mot prognosen i *Nästa lön* och i listan under Lön. Över 500 kr ifrån blir det en post i Att göra ("Lönen blev 800 kr lägre än beräknat – kolla specen").
+  - En ny spec som ändrar konstanterna ger en post i Att göra med vad som ändrades. *Visa* kvitterar och öppnar Inställningar.
+- **⌘0** går till den tionde vyn (Inställningar), eftersom menyn nu har tio vyer.
+
+## Analys
+
+Perioden (3 mån | 6 mån | 12 mån | I år | Anpassat) och *Min del | Hushållet* står i sidhuvudet och delas mellan flikarna. Fliken och perioden står i URL:en (`?flik=mat`, `?period=6m`, `?period=anpassat&fran=…&till=…`; 12 mån, förvalet, skrivs inte ut). *Min del | Hushållet* gäller hela appen och står inte i URL:en. "Senaste N månader" betyder N hela månader plus den här månaden hittills, och Per kategori visar samma månader.
+
+Diagrammen använder kategorifärgerna (underkategorier i ljusare toner) och temats färger, så de fungerar i mörkt tema. Tabellerna har fast första kolumn, tabulära siffror, fet summeringsrad, och negativa tal (mer återbetalt än köpt) i grönt med `+`.
+
+Grundregler i alla vyer:
+- Överföringar, avstämning och det Mio betalat ingår aldrig.
+- *Min del* och *Hushållet* fungerar som i Översikten (samma växel).
+- Privata rader ingår i summorna men visas aldrig med namn.
+- Okänt är en egen post.
+
+Flikarna, i ordning: Per kategori, Snitt, Mat, Matvaror, Fasta mot rörliga, Topplista, Bränsle, Sparande, Priser, Konsumentverket och Jämför perioder. Fliken *Prylar* är borttagen 26/9: Prylar-vyns kalenderläge visar samma sak per månad och kategori, `?flik=prylar` leder dit (`/prylar?visa=kalender`), och Per kategori har *Visa prylarna ›* i legenden när man borrat ned i Prylar & hem.
+- **Per kategori** (Design v2, se `UI-SPEC.md`): fyra nyckeltal, sedan staplat per huvudkategori och månad över perioden (eller *Andelar*, varje månad som 100 %), med månadens total ovanför stapeln och totalen som valfri linje. Tooltipen listar månadens kategorier med belopp och andel. Går att borra ned i underkategorier. Klick på en stapel öppnar transaktionslistan. Tabellen har kategorins snitt sist och tonar varje månad mot det (under 80 % grön, 120–200 % orange, över 200 % röd; påbörjad månad, tom månad och återbetalning tonas inte). Nyckeltalen: *Totalt* över hela perioden, den påbörjade månaden med (som tabellen); *Snitt per månad* och median över de hela månaderna (den påbörjade utan, som Snitt-fliken); *Största kategori* med andel av totalen; *Dyraste månad* bland de hela månaderna, med kategorin som bidrog mest. CSV:n är densamma som förut (månaderna och summan).
+- **Snitt** (Design v2, se `UI-SPEC.md`): per konto och per kategori, per vecka och per månad. Bara hela veckor (mån–sön) och hela månader räknas, och antalet och intervallet visas i tre nyckeltal (snitt per månad, snitt per vecka, summa i perioden), samma tal som Totalt-raden. Månader som importerna inte täcker markeras, med en länk till Importer. Per källa visar varje kontos andel av summan som en stapel i kontots Wallet-färg. Per kategori sorteras störst först (snitt per månad) eller A–Ö, valet sparas i webbläsaren, och varje kategori har en stapel mot den största; utfällda underkategorier har staplar mot sin huvudkategori.
+- **Mat** (Design v2, se `UI-SPEC.md`): andelen restaurang, café och hämtmat av maten (det som inte lagats hemma) som en ring, jämfört med samma period förra året i procentenheter, med maten i perioden och per hel månad. Livsmedel, Restaurang & café och Hämtmat som tre kort med summa, snitt per hel månad och förändringen i procent mot förra året. Per månad som staplade staplar i tre egna färger med andelen ovanför som en tonad pill (grön under 20 %, grå 20–30 %, orange 30–40 %, röd över 40 %); andelen kan också visas som linje. Tabellen har en tredelad stapel per månad och samma tonade andel.
+- **Matvaror** (Design v2, se `UI-SPEC.md`): överst *Vad maten blev* — hur stor del av periodens matköp som har kvitto (*"52 av 298 matköp · 14 421 kr av 69 488 kr"*, med en stapel för kronorna med kvitto av kronorna på mat), butikerna, varornas summa, rabatter, pant och kassar, hyllorna med kronor, andel och rader, och staplar per hylla för de månader som har kvitton (de utan nämns). Täckningen räknar hela köp (ett kvitto halveras aldrig) och bara kvitton som sitter på ett livsmedelsköp. Under det: varorna kvittona sett, med hylla, antal gånger, senast och summa i perioden. Hyllorna som chips med antal filtrerar, och listan sorteras på totalt (de utan hylla först), gånger, senast eller A–Ö; filter och sortering står i adressen, och listan visar 50 rader i taget. De utan hylla nämns i en orange rad med *Visa dem* och *Föreslå hyllor* (kör reglerna över just dem, bara på begäran). Hyllan byts i en pill på raden och sparas direkt. Kryssa i två varor för att slå ihop dem — dialogen frågar vilket namn varan ska heta — och varans egen dialog visar hur ofta den köps, vad den kostar i månaden, billigaste butiken, en prislinje (kvittots à-pris när det finns, annars raden — att köpa två är inte en prishöjning), varje köp, och alla namn butikerna tryckt med en sax som lossar ett namn till en egen vara igen. Ingenting här är pengar: inget namn, ingen hylla och ingen ihopslagning ändrar en summa. Ett kvitto räknas helt, oavsett *Min del | Hushållet*.
+- **Fasta mot rörliga** (Design v2, se `UI-SPEC.md`): fasta, rörliga, inkomster och netto, och hur stor andel av inkomsten som är fast. Inkomsten i perioden som en stapel av fasta, rörliga och netto (röd kant och "X kr mer ut än in" när utgifterna är större), med snitt och spann per hel månad; per månad staplade fasta och rörliga med inkomsten som ett grönt streck och nettot ovanför; tabellen med inkomstens fördelning per månad och den fasta andelen tonad (grön under 25 %, grå 25–40 %, orange över 40 %).
+- **Topplista:** topp 3 som kort och handlarna med antal köp, summa och snitt; sök, sortering (summa, antal köp, snitt per köp), kategorifilter och *Slå ihop samma handlare* (samma namn från namnreglerna = en handlare). Klick öppnar listan.
+- **Bränsle** (Design v2, se `UI-SPEC.md`): tankat under perioden, snitt per pass, snitt l/100 km mot tabellvärdet (med en mätare) och resor som inte räknas; tankat per månad som staplar med kronor per pass ovanför och förbrukningen per månad som en tonad rad under (grön under tabellvärdet, orange över); en tabell med pass, km, tankat, kostnad per pass, l/100 km och resor. Alltid hela beloppet. Månaden som pågår har ingen förbrukning än.
+- **Sparande** (Design v2, se `UI-SPEC.md`): fyra delar.
+  - *Innehav:* portföljen värderad automatiskt — instrument (med kontot), zon, antal, kurs med sitt datum och sin källa, värde och andel, basen först. Totalen är värdepapper plus likvider. En fördelningsstapel för basen, bet-zonen och likviderna med en markör vid målet 80/20, och policytexten under (en orange ruta när bet-zonen är över 25 %). Avstämning mot det handinmatade värdet med likviderna som egen post, räknad på den dag värdet matades in: innehaven enligt affärerna fram till då, den dagens kurser och likviderna då. Knappar för likvider, *Hämta kurser*, nytt instrument och registrera affär (och *Startinnehav* när listan är tom: flera rader på en gång, med GAV som pris och likviderna i samma formulär); detaljvy per instrument med affärer, insatt netto och kurshistorik. Kurserna hämtas var 6:e timme (Yahoo och därefter Avanzas publika kurssidor för kurser, Riksbanken för valuta — vyn säger vilken källa varje siffra kom från); en 429:a pausar den källan i 30 minuter som fördubblas upp till knappt 6 timmar (5 h 50 min, så att nästa körning var sjätte timme inte missas), och källans eget `Retry-After` respekteras när det är längre, men högst 48 timmar. En kurs från Yahoo utan tidpunkt godtas inte (då frågas Avanza). **Gammal kurs:** en kurs äldre än tre bankdagar värderar fortfarande innehavet, men datumet visas i varningsfärg med *gammal*, meningen över tabellen säger vilka innehav det gäller, och Översiktens Sparande-kort säger hur många. Oberoende av perioden. Inga dagsförändringar och inga färgade procenttal någonstans.
+  - *Värdet på ditt sparande:* innehav (Avanza ISK) med värden som förs in för hand, med datum (i dag som standard). Ett nytt värde samma dag ersätter det gamla. Första gången förs namn och dagens värde in tillsammans. Varje värde har en papperskorg (med *Ångra*), och innehavet kan döpas om (penna) och tas bort (frågar först, värdena går också). Visar värde, insatt netto sedan första värdet, värdeförändring och avkastning (värdeförändring minus insatt netto, och i procent av startvärdet plus insatt). Avkastningen kan bara räknas från första värdet, eftersom insättningarna före det inte är kända. Pengar som satts in efter senaste värdet visas för sig. En kurva över alla värden (en ring runt ett värde när pengar satts in eller tagits ut sedan värdet före), och listan med avläsningar har varje värde med avkastningen sedan förra; ett klick på ett värde lägger det i rutan för att ändras. Oberoende av perioden.
+  - *Sparat per månad:* kategorin Överföringar & sparande › Sparande (Swish till Avanza ut, AVANZA på e-sparkontot in). Insatt, uttaget, netto och sparkvot (netto av inkomsten som i Analys, alltså utan pengar från Mio). Staplar för netto kring en nollinje (grönt upp, rött ned när mer togs ut än sattes in) med sparkvoten som pill ovanför varje stapel. Tabell per månad; CSV:n i diagramkortet. Klick öppnar raderna. E-sparkontot är buffert och räknas inte, och Min del / Hushållet påverkar inte fliken.
+  - *Efter inflation* (oberoende av perioden): hela ISK:t (värdepapper och likvider, minus skulden på kreditkontot när dess kontobesked är inlästa) mätt från första kända värdet – de inmatade kvartalsvärdena från Avanza, de kvartal verktyget kan räkna fram sedan innehavet lades in, och dagens. Pengarna (Sparande-överföringarna) räknas i dagens penningvärde med KPI totalt (SCB); en månad som inte publicerats har senaste publicerade månadens nivå, och ett värde (som gäller vid dagens början) har dagen förres månad. **Real vinst** = värdet − startvärdet och det insatta netto, var och en uppräknad till dagens priser; **inflationens del** = det uppräknade − det nominella. Avkastning per period mellan värdena med Modified Dietz, länkad per år och sedan start; real = (1 + nominell) / (1 + inflation) − 1. ISK-skatten per år (deklarerad, eller beräknad för innevarande år) betalas via slutskatten och ingår inte i värdet; sedan start dras den av i proportion till hur stor del av varje år som täcks. Linjen *för att hålla köpkraften* är startvärdet och flödena uppräknade till varje värdes dag. **Avanzas kontobesked** (PDF, *Läs in kontobesked* i kortet, `POST /api/savings/avanza-statements`): för åren ISK:ts besked täcker kommer pengarna in och ut från Avanza (`INSÄTTNING` och `UTTAG` på ISK:t och kreditkontot; flyttarna mellan dem räknas inte), och efter dem från bankens Sparande-överföringar. Varje värde minskas med kreditens saldo den dagen (0 före kreditkontots första besked, sista saldot efter det sista), och ett kvartalsvärde från Avanza också med negativa likvider på ISK:t, som Avanzas kvartalsvärde inte räknar med. Räntan på krediten (`KAP DEB RÄNTA`) visas för sig och ingår i värdet genom skulden. Ett besked vars saldon inte går ihop (ingående + rörelserna = utgående, rad för rad) avvisas, och inget sparas. **Bufferten** (kontot som valts för Uthållighet): saldot i dag, inflationen de senaste tolv KPI-månaderna som den ränta som håller köpkraften, och per helt år med rader på kontot snittsaldot (årets början och varje månadsslut), räntan (raderna som heter något med ränta), inflationen december till december och köpkraften: snittsaldot × inflationen − räntan.
+  - API: `GET /api/savings/real` (sparad som de andra tunga svaren), `POST|GET /api/savings/avanza-statements`, `DELETE /api/savings/avanza-statements/:id`, `GET /api/savings?from=&to=`, `POST|PATCH|DELETE /api/savings/holdings…`, `PUT /api/savings/holdings/:id/values` (`{date, value}`), `DELETE /api/savings/holdings/:id/values/:date`.
+- **Priser** (Design v2, se `UI-SPEC.md`): min matkostnad mot SCB:s KPI för livsmedel, båda i 100 i startmånaden; SCB:s varugrupper var för sig; och mina tankningar mot Weekly Oil Bulletins rikssnitt samma vecka, en grön prick under rikssnittet och en röd över, med pumppriset som ring och rabatten som streck mellan dem.
+- **Jämför perioder** (Design v2, se `UI-SPEC.md`): två periodkort, A och B (månader, kvartal, år eller egna perioder), där B kan vara perioden före, samma period förra året eller 12-månaderssnittet (skalat till A:s längd), och ⇄ byter dem; valen står i adressen. Totalens skillnad i stor stil med de fyra största skillnaderna, och en tabell med A över B som staplar, A, B och Δ som pill (orange = mer utgifter i A, grön = mindre), störst skillnad först eller i kategoriordning.
+- **CSV-export:** finns på varje tabell. Filen använder semikolon och decimalkomma och har BOM.
+
+## Deklaration och skatt
+
+Skatteverkets kvittens för inkomstdeklarationen (*Kvittens – Inkomstdeklaration 1*, PDF) läses in i Importer. 
+
+- **Vad som sparas:** inkomståret, dagen deklarationen skickades och raderna 1.1, 2.1, 7.1, 7.2 och 8.1 (`tax_returns`). Rader läses via radnumret, och ett år går att mata in eller rätta i Inställningar › Deklaration.
+- **Vad som aldrig sparas:** namn, personnummer, kvittensnummer och filen.
+- **Lön › Årsinkomst:** en stapel per inkomstår, med innevarande år som utbetalt plus prognos och ett spann. Förändringen visas nominellt och realt mot KPI.
+- **Pension › Årsbesked:** deklarerad lön och den PGI den ger, bredvid årsbeskedets.
+- **Pendling › Reseavdrag:** 2.1 per år, backtest av förra året och prognos för nästa deklaration.
+- **ISK-skatt:** räknas på Balansräkningen ur kvartalsvärden och insättningar, minus fribeloppet, gånger schablonräntan och 30 %. Deklarationens rad 7.1 är schablonintäkten på hela underlaget, före fribeloppet: ett deklarerat år har underlaget 7.1 ÷ räntan och skatten 30 % av (7.1 − fribeloppet × räntan), aldrig under noll. Räntan och fribeloppet ligger per år med källa i Inställningar › Deklaration.
+- **Påminnelser:**
+  - Att fylla i frågar efter kvittensen varje vår.
+  - Vakt säger till när deklarationen saknas efter 2 maj och när ISK:t passerar 90 % av fribeloppet.
+- **Skatteåterbäring (uppskattad):** slutlig skatt enligt Skatteverkets regler för året, med satserna per år i Inställningar › Lön. Den jämförs med lönespecarnas faktiska preliminärskatt plus bankens på räntan. Resultatet står som planerad inkomst (eller kvarskatt) i Kassaflöde när utbetalningsdagen är inom 90 dagar och annars som en rad i Framåt, alltid med uträkningen i en popover.
+
+## Handlarikoner
+
+Varje handlare har en rund ikon i Fasta utgifter (listrader, kort och kalenderns chips), i transaktionslistan (före beskrivningen), i Att granska-korten och i Analys topplista. Storleken är 28 px i Fasta utgifter (listan, korten på telefon och kalenderns daglista), 24 px i transaktionslistan och Att granska, 32 px i Analys topplista (48 px i topp 3-korten), och 20 px där raden är tät, som regellistan i Kategorier & regler. Kalenderns chips får 14 px med en bokstav, eftersom ikonen aldrig får vara större än raden. Inga ikoner i sammanfattningskort (utom Topplistans topp 3, som är handlare) eller diagram, och inga nätverksanrop för ikoner, någonsin.
+
+- **Nivåerna, i ordning:**
+  1. Egen uppladdad bild: på en fast utgift (bara den) eller på en regel (alla köp regeln träffar).
+  2. Inbyggd varumärkesikon ur simple-icons.
+  3. Monogram.
+- **Monogram:**
+  - **Namn:** radens egen etikett vinner. Annars används kontaktens namn för ett Swish-nummer med kontakt, samma i båda riktningarna. Annars används bankens text.
+  - **Brus som tas bort:** prefixet `K*`, ett inledande "Swish"/"Swish betalning", allt efter `*` hos Google och Amazon (där är det produkt- eller ordernummer), betalförmedlarens namn före `*` hos PayPal, Klarna, Zettle och SumUp (där står den riktiga handlaren efter stjärnan: "PAYPAL *STEAM" → S), och kodord. Ett kodord består till mer än hälften av siffror, eller av versaler och siffror utan vokal. Bolagsformer och landskoder i slutet tas också bort: AB, INC, LLC, LTD, GMBH, OY, AS, ASA, SWE, SE, NO, DK, FI, COM, BV. Blir inget kvar används originalet.
+  - **Initialer:** ett ord ger första bokstaven, eller bokstaven och siffran om ordet är bokstäver plus en siffra ("Tele2" → T2). Flera ord ger de två första ordens initialer.
+  - **Färg:** ur en stabil hash av det putsade namnet, en av de 16 palettfärgerna, samma i båda temana. Texten är vit eller nästan svart med kontrast minst 4,5:1.
+  - **Swish utan kontakt:** en grå personikon i stället för en siffra.
+- **Varumärken:**
+  - **Källa:** `simple-icons` används bara vid bygget. `npm run icons:brands`, som körs av `dev:web` och `build:web`, skriver `web/src/generated/brandIcons.ts` med de 14 ikoner som tabellen i `server/src/icons/brands.ts` använder, inte hela paketet.
+  - **Val av varumärke:** `merchant_rules.brand_slug` går före tabellens mönster, som prövas mot bankens text med undermärken först (YouTube före Google). Bakom en betalförmedlare prövas först det som står efter stjärnan ("PAYPAL *STEAM" får Steams ikon).
+  - **Färg:** varumärkets egen färg på en neutral bricka, eller temats textfärg där färgen har under 3:1 mot brickan.
+- **Uppslag:** servern slår upp ikonen en gång per lista, med samma regelmatchning som kategorierna, och skickar `icon: {brand?, image?}` på raderna. Det gäller `GET /api/transactions`, `/api/review/groups`, `/api/analysis/merchants` och `/api/recurring-expenses`. En fast utgift tar ikonen från sin senaste dragning, annars från sitt mönster.
+- **Tillgänglighet:** bredvid det utskrivna namnet är ikonen dold för skärmläsare. Ensam läses den upp med handlarens namn, aldrig ett filnamn.
+- **Egen bild:**
+  - **Filer:** PNG, JPG, WebP eller SVG, högst 200 kB. Typen läses ur filens innehåll, inte ur vad webbläsaren säger.
+  - **Skalning:** bilden skalas med sharp till 64×64 (contain, proportionerna behålls, transparensen behålls). SVG ritas om till PNG, och en SVG med skript eller länkar avvisas. JPG blir PNG så att kanterna kan vara transparenta. WebP förblir WebP.
+  - **Lagring:** `data/icons/<innehållshash>.<ext>` bredvid databasen (testinstansen har `data/test/icons`). Mappen ligger i `.gitignore`, och varje säkerhetskopia kopierar nya ikoner till `backups/icons/`.
+  - **Servering:** `GET /api/icons/<fil>` med årslång, oföränderlig cache. En ny bild får ett nytt namn.
+  - **Var den läggs in:**
+    - *Fasta utgifter:* avsnittet Ikon i detaljpanelen. Matchar utgiftens dragning en regel frågar appen "Gäller bilden bara Pocket, eller alla köp hos APPLE.COM/BILL?", med bara utgiften som förval (Enter).
+    - *Transaktioner:* "Ikon för handlaren" i panelen, på regeln som avgör raden. Utan regel finns ingenstans att lägga bilden.
+    - *Kategorier & regler:* en ikonkolumn först i regeltabellen. Klicka eller dra en fil till ikonen. ⌘V med en bild i urklipp lägger den på den markerade regeln, så ↓ ⌘V ↓ ⌘V går nedåt i listan. Sorteringen "Saknar ikon först" (förval) visar regler utan varumärke och utan bild överst, med flest träffar först.
+  - **Uppladdningssätt:** överallt går det med filväljare, dra och släpp eller ⌘V. Typ och storlek kontrolleras innan filen skickas.
+  - **Ta bort ikon** tar bara bort kopplingen. Ikonen faller tillbaka till varumärket eller monogrammet, och filen ligger kvar, eftersom säkerhetskopior kan peka på den.
+  - **API:** `POST|DELETE /api/rules/:id/icon`, `POST|DELETE /api/recurring-expenses/:id/icon` (fältet `file`). `GET /api/rules` har `icon`, `brandSlug` och `iconPath`. Fasta utgifter har `iconRule` (regeln deras dragning träffar).
+
+## Inte byggt i v0.1
+
+- **Steg 8, LLM-kategorisering:** knappstyrd, med förslag i Att granska och `claude-sonnet-4-6`.
+- **Egen vy för överföringar:** de syns i transaktionslistan med *Visa överföringar*.

@@ -1,0 +1,1 @@
+ALTER TABLE `transactions` ADD `settlement_excluded` integer DEFAULT false NOT NULL;

@@ -1,0 +1,95 @@
+@import "tailwindcss";
+@import "./styles/tokens.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Under 900 px (phones, narrow windows) the sidebar becomes a tab bar at the bottom: 'nav:' is the wide layout. */
+@theme {
+  --breakpoint-nav: 56.25rem;
+}
+
+@layer base {
+  html,
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    /* Switching between light and dark fades instead of snapping. Only these
+       two elements: a transition on everything would make every hover and
+       every colour change in the app lag behind. */
+    transition:
+      background-color 200ms ease-out,
+      color 200ms ease-out;
+  }
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    /* Figures line up in every list and card. */
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(24px); opacity: 0; }
+}
+@keyframes slide-in-up {
+  from { transform: translateY(8px); opacity: 0; }
+}
+@keyframes pop-in {
+  from { transform: translateY(-4px) scale(0.98); opacity: 0; }
+}
+/* Dialogs (⌘K among them) grow the last bit into place. The centring
+   translate has to be repeated here, or the box would jump sideways. */
+@keyframes dialog-in {
+  from { transform: translateX(-50%) scale(0.95); opacity: 0; }
+}
+@layer components {
+  /*
+   * A card you can click: it lifts a hair and picks up a shadow under the
+   * pointer, and settles back when pressed. Only for cards that actually do
+   * something — on a card that just shows a number the lift is a lie.
+   */
+  .card-click {
+    transition:
+      transform 180ms ease-out,
+      box-shadow 180ms ease-out;
+  }
+  .card-click:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px -4px rgb(0 0 0 / 0.12);
+  }
+  .card-click:active {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}
+
+/*
+ * iPhone Safari zooms into a field whose text is under 16 px. Outside the
+ * layers on purpose, so it wins over size utilities like text-sm.
+ */
+@media (max-width: 56.249rem) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `recurring_expenses` DROP COLUMN `day_of_month`;

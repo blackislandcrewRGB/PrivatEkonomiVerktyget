@@ -1,0 +1,1 @@
+ALTER TABLE `recurring_expenses` ADD `part_of_id` integer REFERENCES recurring_expenses(id) ON DELETE SET NULL;

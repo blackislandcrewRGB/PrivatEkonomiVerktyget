@@ -1,0 +1,136 @@
+{
+  "note": "Tabell, variabelnamn och COICOP-koder lästa ur SCB:s egen metadata 2026-09-20 (GET på tabellens URL). Ett test kontrollerar varje kod mot den inspelade metadatan, så en kod som SCB tar bort eller döper om faller ut i sviten i stället för i drift.",
+  "table": {
+    "url": "https://api.scb.se/OV0104/v1/doris/sv/ssd/PR/PR0101/PR0101A/KPI2020COICOPM",
+    "label": "Konsumentprisindex (KPI) enligt COICOP (alla nivåer), 2020=100. Månad",
+    "groupVariable": "VaruTjanstegrupp",
+    "timeVariable": "Tid",
+    "contentsVariable": "ContentsCode",
+    "contentsCode": "0000080H",
+    "source": "SCB, KPI efter COICOP (2020=100)",
+    "from": "2020-01-01",
+    "publishDay": 15
+  },
+  "headlineNote": "Serien mina egna matutgifter jämförs mot: 01, livsmedel OCH alkoholfria drycker, eftersom mina matinköp innehåller läsk och kaffe. Undergrupperna visas för sig, utan min serie.",
+  "headline": "kpi_food_beverages",
+  "series": [
+    {
+      "key": "kpi_food_total",
+      "coicop": "01.1",
+      "name": "Livsmedel"
+    },
+    {
+      "key": "kpi_food_beverages",
+      "coicop": "01",
+      "name": "Livsmedel och alkoholfria drycker"
+    },
+    {
+      "key": "kpi_bread",
+      "coicop": "01.1.1",
+      "name": "Bröd och spannmålsprodukter"
+    },
+    {
+      "key": "kpi_meat",
+      "coicop": "01.1.2",
+      "name": "Kött"
+    },
+    {
+      "key": "kpi_dairy",
+      "coicop": "01.1.4",
+      "name": "Mjölk, ost och ägg"
+    },
+    {
+      "key": "kpi_fruit",
+      "coicop": "01.1.6",
+      "name": "Frukt och nötter"
+    },
+    {
+      "key": "kpi_vegetables",
+      "coicop": "01.1.7",
+      "name": "Grönsaker"
+    },
+    {
+      "key": "kpi_coffee",
+      "coicop": "01.2.2",
+      "name": "Kaffe"
+    },
+    {
+      "key": "kpi_tea",
+      "coicop": "01.2.3",
+      "name": "Te"
+    },
+    {
+      "key": "kpi_clothing",
+      "coicop": "03",
+      "name": "Kläder och skodon",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_furnishings",
+      "coicop": "05",
+      "name": "Möbler, hushållsutrustning och rutinunderhåll",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_household_maintenance",
+      "coicop": "05.6",
+      "name": "Varor och tjänster för rutinmässigt hushållsunderhåll",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_ict_equipment",
+      "coicop": "08.1",
+      "name": "Informations- och kommunikationsutrustning",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_ict_services",
+      "coicop": "08.3",
+      "name": "Informations- och kommunikationstjänster",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_recreation",
+      "coicop": "09",
+      "name": "Rekreation, sport och kultur",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_cultural_services",
+      "coicop": "09.6",
+      "name": "Kulturella tjänster",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_insurance",
+      "coicop": "12.1",
+      "name": "Försäkringar",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_personal_care",
+      "coicop": "13.1",
+      "name": "Personlig vård",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_electricity",
+      "coicop": "04.5",
+      "name": "Elektricitet, gas och andra bränslen",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_water",
+      "coicop": "04.4",
+      "name": "Vattenförsörjning och andra bostadstjänster",
+      "use": "reference"
+    },
+    {
+      "key": "kpi_total",
+      "coicop": "00",
+      "name": "KPI totalt",
+      "use": "income"
+    }
+  ],
+  "referenceNote": "Serierna med use: reference följer Konsumentverkets poster (KPI-justeringen av referensbudgeten, se server/reference-budget/). De visas inte i Analys › Priser. KPI totalt (use: income) räknar om Lön › Årsinkomst till fast penningvärde och visas inte heller där. Koderna är COICOP 2018, som tabellen använder: personlig vård är 13.1 och försäkringar 12.1."
+}

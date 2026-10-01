@@ -1,0 +1,1 @@
+ALTER TABLE `recurring_expenses` ADD `anchor_month` integer;

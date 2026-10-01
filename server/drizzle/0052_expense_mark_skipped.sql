@@ -1,0 +1,1 @@
+ALTER TABLE `recurring_expense_marks` ADD `kind` text DEFAULT 'paid' NOT NULL;

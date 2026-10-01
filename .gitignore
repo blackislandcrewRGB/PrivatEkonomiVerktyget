@@ -1,0 +1,20 @@
+node_modules/
+dist/
+data/
+.env
+.DS_Store
+exports/
+.claude/
+secrets/
+*.pem
+
+# Your own server and your own notes: never in git.
+deploy.local.env
+compose.override.yml
+CLAUDE.local.md
+/privat/
+docs/privat/
+
+# Real invoices, receipts, statements and payslips the optional local tests read when they are
+# there: a name, an address, a card or membership number. Kept on your own computer, never committed.
+samples/
