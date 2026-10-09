@@ -151,8 +151,8 @@ export function parseMastercardInvoice(lines: PdfLine[]): MastercardInvoice {
     nextPeriodTo: findAfter(all, /gjorda t o m (\d{4}-\d{2}-\d{2})/),
   };
 
-  const rows = parseSpecification(lines);
-  checkInvoiceTotals(lines, rows, statement);
+  const { rows, paidColumn } = parseSpecification(lines);
+  checkInvoiceTotals(lines, rows, paidColumn, statement);
   return { kind: "invoice", statement, rows };
 }
 
@@ -165,10 +165,16 @@ interface Columns {
   paid: number;
 }
 
-function parseSpecification(lines: PdfLine[]): MastercardRow[] {
+/**
+ * The rows of the specification, and those printed in the 'Inbetalt' column.
+ * The invoice counts all of them as paid in: the payments, but also credits
+ * such as 'BONUSUTBETALNING', which are not payments of the invoice.
+ */
+function parseSpecification(lines: PdfLine[]): { rows: MastercardRow[]; paidColumn: Set<MastercardRow> } {
   const start = lines.findIndex((l) => l.items.some((i) => i.text === "Specifikation"));
   if (start < 0) throw new ImportParseError("Hittade ingen specifikation i Mastercard-fakturan.");
   const rows: MastercardRow[] = [];
+  const paidColumn = new Set<MastercardRow>();
   let cols: Columns | null = null;
   let card: string | null = null;
   let current: { date: string; posted: string; desc: string[]; area: string[]; amount: number | null; paid: number | null } | null = null;
@@ -186,7 +192,7 @@ function parseSpecification(lines: PdfLine[]): MastercardRow[] {
     const area = normalizeWhitespace(areaText.replace(/-?\d[\d ]*,\d{2,3}\s*[A-Z]{3}/, "").replace(/Kurs\s*\d+,\d+/, "").replace(/\bKurs\b/, ""));
     const amount = c.amount !== null ? -c.amount : c.paid!;
     const f = foreign ? parseForeign(foreign[1]) : null;
-    rows.push({
+    const row: MastercardRow = {
       transactionDate: c.date,
       postedDate: c.posted,
       description,
@@ -198,7 +204,9 @@ function parseSpecification(lines: PdfLine[]): MastercardRow[] {
       cardMasked: card,
       isPayment: isMastercardPayment(description),
       fingerprint: mastercardFingerprint({ transactionDate: c.date, description, amount }),
-    });
+    };
+    rows.push(row);
+    if (c.amount === null) paidColumn.add(row);
   };
 
   for (const l of lines.slice(start + 1)) {
@@ -241,10 +249,10 @@ function parseSpecification(lines: PdfLine[]): MastercardRow[] {
   }
   flush();
   if (rows.length === 0) throw new ImportParseError("Specifikationen i Mastercard-fakturan har inga rader.");
-  return rows;
+  return { rows, paidColumn };
 }
 
-function checkInvoiceTotals(lines: PdfLine[], rows: MastercardRow[], s: MastercardStatement) {
+function checkInvoiceTotals(lines: PdfLine[], rows: MastercardRow[], paidColumn: Set<MastercardRow>, s: MastercardStatement) {
   const errors: string[] = [];
   const kr = (ore: number) => (ore / 100).toFixed(2).replace(".", ",");
   for (const l of lines.map(lineText)) {
@@ -257,8 +265,9 @@ function checkInvoiceTotals(lines: PdfLine[], rows: MastercardRow[], s: Masterca
     const total = /^TOTALT:\s*([-−]?[\d\s]+,\d{2})\s+([-−]?[\d\s]+,\d{2})/.exec(l);
     if (total) {
       const [used, paid] = [parseSekAmount(total[1])!, parseSekAmount(total[2])!];
-      const gotUsed = -rows.filter((r) => !r.isPayment).reduce((t, r) => t + r.amount, 0);
-      const gotPaid = rows.filter((r) => r.isPayment).reduce((t, r) => t + r.amount, 0);
+      // As the invoice counts: 'använt' is the Belopp column, 'inbetalt' the Inbetalt column (a bonus credit is in it too).
+      const gotUsed = -rows.filter((r) => !paidColumn.has(r)).reduce((t, r) => t + r.amount, 0);
+      const gotPaid = rows.filter((r) => paidColumn.has(r)).reduce((t, r) => t + r.amount, 0);
       if (gotUsed !== used) errors.push(`Totalt använt: raderna ger ${kr(gotUsed)}, fakturan säger ${kr(used)}.`);
       if (gotPaid !== paid) errors.push(`Totalt inbetalt: raderna ger ${kr(gotPaid)}, fakturan säger ${kr(paid)}.`);
     }

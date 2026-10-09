@@ -50,7 +50,8 @@ const PURCHASES_TOTAL = PURCHASES.reduce((t, r) => t + r[4], 0); // 55731
 const AFTER = 24550 + 18900 + 25426;
 const USED_CREDIT = PURCHASES_TOTAL + AFTER;
 
-function madeUpInvoice(): PdfLine[] {
+/** `bonus`: a credit like 'BONUSUTBETALNING', printed in the Inbetalt column and counted as paid in by the invoice. */
+function madeUpInvoice(bonus = 0): PdfLine[] {
   let y = 800;
   const next = (items: [number, string][]) => line(1, (y -= 12), items);
   return [
@@ -59,9 +60,9 @@ function madeUpInvoice(): PdfLine[] {
     next([[40, "Datum vid sammanställning: 2026-09-04"]]),
     next([[40, "Oss tillhanda: 2026-09-30"]]),
     next([[40, `Skuld på föregående faktura: ${sek(PAID.amount)}`]]),
-    next([[40, `Periodens inbetalningar: ${sek(PAID.amount)}`]]),
+    next([[40, `Periodens inbetalningar: ${sek(PAID.amount + bonus)}`]]),
     next([[40, `Periodens köp och transaktioner (inklusive avgifter): ${sek(PURCHASES_TOTAL)}`]]),
-    next([[40, `Total skuld vid sammanställning: ${sek(PURCHASES_TOTAL)}`]]),
+    next([[40, `Total skuld vid sammanställning: ${sek(PURCHASES_TOTAL - bonus)}`]]),
     next([[300, "Lägst att betala:"]]),
     next([[300, "100,00"]]),
     next([[40, "Vid nästa avisering redovisas köp och uttag gjorda t o m 2026-10-07"]]),
@@ -74,8 +75,9 @@ function madeUpInvoice(): PdfLine[] {
       next([[24, date], [80, posted], [140, text], [300, city], [440, sek(ore)]]),
       ...(i === 1 ? [next([[140, "INTERNET TRANSAKTION"]])] : []),
     ]),
-    next([[40, `PERIODENS TOTALA TRANSAKTIONER KORTNR ${CARD}: ${sek(PURCHASES_TOTAL)}`]]),
-    next([[40, `TOTALT: ${sek(PURCHASES_TOTAL)} ${sek(PAID.amount)}`]]),
+    ...(bonus ? [next([[24, "2026-09-03"], [80, "2026-09-04"], [140, "BONUSUTBETALNING"], [500, sek(bonus)]])] : []),
+    next([[40, `PERIODENS TOTALA TRANSAKTIONER KORTNR ${CARD}: ${sek(PURCHASES_TOTAL - bonus)}`]]),
+    next([[40, `TOTALT: ${sek(PURCHASES_TOTAL)} ${sek(PAID.amount + bonus)}`]]),
   ];
 }
 
@@ -174,6 +176,16 @@ describe("Mastercard invoice (made-up PDF text)", () => {
     });
     // 'INTERNET TRANSAKTION' is not part of the description; nothing holds the account number or OCR.
     expect(rows.map((r) => r.description).join(" ")).not.toMatch(/INTERNET|\d{13,}/);
+  });
+
+  it("a bonus credit in the Inbetalt column counts as paid in for the invoice's totals, and stays an ordinary credit row", () => {
+    const { statement, rows } = parseMastercardInvoice(madeUpInvoice(10000));
+    expect(statement).toMatchObject({ paymentsTotal: 240590, purchasesTotal: 55731, totalDebt: 45731 });
+    expect(rows).toHaveLength(6);
+    // Not a payment of the invoice: it is not a transfer, and its card is the one it was credited to.
+    expect(rows.find((r) => r.description === "BONUSUTBETALNING")).toMatchObject({ amount: 10000, isPayment: false, cardMasked: CARD });
+    // A bonus the invoice doesn't count in its totals is still refused.
+    expect(() => parseMastercardInvoice(edit(madeUpInvoice(10000), "TOTALT: 557,31 2 405,90", "TOTALT: 557,31 2 305,90"))).toThrow(/stämmer inte med dess summor/);
   });
 
   it("refuses an invoice whose rows don't add up to its totals", () => {
