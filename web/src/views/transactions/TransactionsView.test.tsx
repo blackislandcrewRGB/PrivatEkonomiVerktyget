@@ -61,6 +61,7 @@ const tx = (bookingDate: string, descriptionClean: string, amount: number, extra
 });
 
 /** 'Gör till fast utgift…': the form's start, from the purchase. */
+const PLAN_CANDIDATES = [{ id: 7, name: "ChatGPT", planName: null, amount: 24900, currency: null, vatPercent: null, from: "2026-10", day: 6 }];
 const DRAFT = { name: "Apple.com/se", pattern: "APPLE.COM/SE", amount: 129900, date: "2026-05-25", accountName: "Swedbank Privatkonto" };
 
 let rows: Transaction[];
@@ -141,7 +142,7 @@ beforeEach(async () => {
       const b = init.json as { pattern: string; label: string; ids: number[] };
       return { rule: { id: 4, matchType: "contains", createdAt: "", rows: 0, ...b }, previousLabel: null, renamed: b.ids.length > 1 ? b.ids.length : 0, applied: 3, before: [] };
     },
-    "GET /transactions/": (url: string) => url.endsWith("/recurring-draft") ? DRAFT : ({
+    "GET /transactions/": (url: string) => url.endsWith("/plan-candidates") ? (rows.some((r) => r.descriptionClean.includes("CHATGPT")) ? PLAN_CANDIDATES : []) : url.endsWith("/recurring-draft") ? DRAFT : ({
       id: 1,
       descriptionRaw: "RAW",
       postedDate: null,
@@ -182,6 +183,7 @@ beforeEach(async () => {
     // Any row's 'watch-charge' (the longer 'bulk' key still wins for that one).
     "POST /transactions/": { id: 12, name: "Podme", remindDays: null, remindBeforeCharge: true },
     "DELETE /recurring-expenses/12": { ok: true },
+    "POST /recurring-expenses/7/": { id: 7, name: "ChatGPT" },
   });
   await reloadCategories();
 });
@@ -457,6 +459,28 @@ describe("notes", () => {
         [`/api/transactions/${apple.id}/make-recurring`, { name: "Apple Developer", cycle: "yearly", pattern: "APPLE.COM/SE" }],
       ]),
     );
+  });
+
+  it("a purchase that looks like a fixed expense's new plan: 'Byt plan för …' makes it the first charge of the plan, and the toast takes it back", async () => {
+    const chatgpt = tx("2026-10-06", "OPENAI *CHATGPT SUBSCR", -93700);
+    rows = [chatgpt];
+    renderView();
+    await userEvent.click(await screen.findByText("OPENAI *CHATGPT SUBSCR"));
+    const panel = await screen.findByRole("dialog");
+    await userEvent.click(await within(panel).findByRole("button", { name: "Byt plan för ChatGPT…" }));
+    const form = within(panel).getByRole("form", { name: "Byt plan" });
+    expect(form.textContent?.replace(/\s/g, " ")).toContain("ChatGPT kostade 249,00 kr");
+    expect(form.textContent?.replace(/\s/g, " ")).toContain("937,00 kr, blir första dragningen på den nya planen: från oktober 2026, dragen den 6:e");
+    await userEvent.type(within(form).getByLabelText("Namn på planen (valfritt)"), "Pro");
+    await userEvent.click(within(form).getByRole("button", { name: "Byt plan" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, "POST", "/recurring-expenses/7/change-plan")).toEqual([
+        ["/api/recurring-expenses/7/change-plan", { transactionId: chatgpt.id, from: "2026-10", anchorDay: 6, amount: 93700, name: "Pro" }],
+      ]),
+    );
+    const toast = await screen.findByText("ChatGPT har bytt plan: 937,00 kr från oktober 2026. Dragningen före räknas kvar på den gamla planen.");
+    await userEvent.click(within(toast.closest("li") as HTMLElement).getByRole("button", { name: "Ångra" }));
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/recurring-expenses/7/undo-plan-change")).toEqual([["/api/recurring-expenses/7/undo-plan-change", { transactionId: chatgpt.id }]]));
   });
 
   it("renaming one row asks whether new imports with that text should get the name too; R saves the name rule", async () => {

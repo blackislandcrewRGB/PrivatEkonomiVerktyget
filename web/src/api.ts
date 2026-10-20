@@ -471,6 +471,11 @@ export interface RecurringExpense extends ExpenseSchedule {
   nextForeignAmount?: number | null;
   /** The month of the next draw's period: where a new price starts by default. */
   nextPeriod?: string | null;
+  /** The name of the plan it is on (Plus, Pro), and of the one a coming change goes to. */
+  planName?: string | null;
+  nextPlanName?: string | null;
+  /** The plans it has been on in order, the one it is on now last; empty until it has changed plan. */
+  plans?: PlanSpan[];
   /** Has its own amount for one or more months (e.g. CSN). */
   variesByMonth: boolean;
   thisMonthAmount: number;
@@ -504,10 +509,24 @@ export interface ExpenseHistory {
   charges: { id: number; bookingDate: string; transactionDate: string | null; amount: number; descriptionClean: string; accountId: number | null }[];
 }
 
+/** One plan of a fixed expense: the months it held for (the first has no known start; the current one no end). */
+export interface PlanSpan {
+  from: string | null;
+  until: string | null;
+  plan: { amount: number; foreignAmount: number | null; anchorDay: number | null; scheduleType: "day_of_month" | "last_day"; name: string | null };
+}
+
 export interface ExpenseMonth {
   month: string;
+  /** The plan the month is on, and whether a new plan began in it (then it often has two charges). */
+  plan?: string | null;
+  planChange?: boolean;
+  /** How many charges the month has. */
+  charges?: number;
   /** The month's own amount, if set. */
   amount: number | null;
+  /** What the month costs without an amount of its own: its plan's price. */
+  usual?: number;
   expected: number;
   charged: number | null;
 }

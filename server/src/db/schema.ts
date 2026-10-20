@@ -39,6 +39,17 @@ export const IMPORT_VIA = ["file", "enable_banking"] as const;
 export const BANK_CONNECTION_STATUSES = ["pending", "active", "expired", "revoked", "error"] as const;
 export const SCHEDULE_TYPES = ["day_of_month", "last_day"] as const;
 export const BANK_DAY_RULES = ["none", "next", "previous"] as const;
+
+/** A plan a fixed expense was on before a change (Plus before Pro): up to and including `until` (YYYY-MM). */
+export interface PastPlan {
+  until: string;
+  amount: number;
+  foreignAmount: number | null;
+  scheduleType: (typeof SCHEDULE_TYPES)[number];
+  anchorDay: number | null;
+  bankDayRule: (typeof BANK_DAY_RULES)[number];
+  name: string | null;
+}
 export const DATE_BASES = ["transaction", "booking"] as const;
 export const CATEGORY_SOURCES = ["rule", "merchant_category", "llm", "manual", "none"] as const;
 export const MATCH_TYPES = ["exact", "contains", "regex"] as const;
@@ -218,6 +229,13 @@ export const recurringExpenses = sqliteTable("recurring_expenses", {
   nextFrom: text("next_from"),
   nextAmount: integer("next_amount"),
   nextForeignAmount: integer("next_foreign_amount"),
+  nextPlanName: text("next_plan_name"),
+  // The plan it is on now (Plus, Pro): optional, only a label.
+  planName: text("plan_name"),
+  // The plans it was on before, oldest first, each up to and including `until`
+  // (YYYY-MM): price and day, so a period before a plan change keeps its own
+  // price and draw day (recurring/plans.ts).
+  planHistory: text("plan_history", { mode: "json" }).$type<PastPlan[]>(),
 });
 
 export const imports = sqliteTable("imports", {

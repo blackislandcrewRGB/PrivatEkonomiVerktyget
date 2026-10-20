@@ -96,9 +96,9 @@ describe("amount per month for a recurring expense", () => {
       charged: number | null;
     }[];
     expect(months).toHaveLength(12);
-    expect(months[6]).toEqual({ month: "2026-07", amount: null, expected: 180000, charged: 180000 });
-    expect(months[7]).toEqual({ month: "2026-08", amount: null, expected: 180000, charged: 170000 });
-    expect(months[9]).toEqual({ month: "2026-10", amount: 230000, expected: 230000, charged: null });
+    expect(months[6]).toMatchObject({ month: "2026-07", amount: null, expected: 180000, charged: 180000 });
+    expect(months[7]).toMatchObject({ month: "2026-08", amount: null, expected: 180000, charged: 170000 });
+    expect(months[9]).toMatchObject({ month: "2026-10", amount: 230000, expected: 230000, charged: null });
   });
 
   it("rejects bad months and amounts", async () => {

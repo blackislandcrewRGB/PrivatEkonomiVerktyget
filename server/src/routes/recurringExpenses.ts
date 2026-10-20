@@ -22,7 +22,8 @@ import { expenseOccurrences } from "../overview/overview.js";
 import { applyExpenseShared, linkRecurring } from "../recurring/link.js";
 import { chargePeriod, expectedAmounts, latestChargeCheck, monthsOfYear } from "../recurring/amounts.js";
 import { foreignPrice, priceInKronor } from "../recurring/foreignPrice.js";
-import { applyPriceChanges } from "../recurring/priceChange.js";
+import { applyPriceChanges, planSwitchError, switchPlan } from "../recurring/priceChange.js";
+import { currentPlanFrom, planTimeline } from "../recurring/plans.js";
 import { chargeOwnerId, FOLLOWED_FIELDS, followOwner, groupShared, partsByOwner } from "../recurring/parts.js";
 import { ImportParseError } from "../import/swedbank.js";
 import { iconResolver, iconUrl } from "../icons/icons.js";
@@ -31,6 +32,9 @@ import { accountFor, periodMonth } from "../recurring/changes.js";
 
 type Expense = typeof recurringExpenses.$inferSelect;
 type Patch = Partial<Omit<Expense, "id" | "manuallyEditedAt">>;
+
+/** The name of a plan is a label (Plus, Pro). */
+const PLAN_NAME_MAX = 40;
 
 /** Validates a create/update body. Returns the clean patch or an error message. */
 function validate(db: Db, b: Record<string, unknown>, creating: boolean): Patch | string {
@@ -124,7 +128,13 @@ function validate(db: Db, b: Record<string, unknown>, creating: boolean): Patch 
   if (has("nextFrom")) {
     if (b.nextFrom !== null && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(b.nextFrom))) return "Månaden för det nya priset ska vara ÅÅÅÅ-MM.";
     out.nextFrom = b.nextFrom as string | null;
-    if (b.nextFrom === null) Object.assign(out, { nextAmount: null, nextForeignAmount: null });
+    if (b.nextFrom === null) Object.assign(out, { nextAmount: null, nextForeignAmount: null, nextPlanName: null });
+  }
+  for (const k of ["nextPlanName", "planName"] as const) {
+    if (!has(k)) continue;
+    const name = typeof b[k] === "string" ? (b[k] as string).trim() : "";
+    if (name.length > PLAN_NAME_MAX) return `Namnet på planen får vara högst ${PLAN_NAME_MAX} tecken.`;
+    out[k] = name || null;
   }
   for (const k of ["nextAmount", "nextForeignAmount"] as const) {
     if (has(k) && b.nextFrom !== null) {
@@ -285,11 +295,15 @@ export function recurringExpenseRoutes(db: Db) {
         const check = latestChargeCheck(db, r, expected, parts);
         // A part has no charges of its own: no schedule to suggest from them.
         const dates = r.partOfId === null ? charges.filter((t) => t.expenseId === r.id).map((t) => chargeDate(r, t)) : [];
-        const suggestion = r.billingCycle === "monthly" ? suggestSchedule(r, dates) : null;
+        // The day is suggested from the charges on the plan it is on now: the ones before were drawn on that plan's day.
+        const began = currentPlanFrom(r);
+        const suggestion = r.billingCycle === "monthly" ? suggestSchedule({ ...r, planHistory: null }, began ? dates.filter((d) => d.slice(0, 7) >= began) : dates) : null;
         const next = nextOccurrence(r, today);
         return {
           ...r,
           scheduleText: describeSchedule(r),
+          // The plans in order (none until it has changed plan), each with the month it began and ended.
+          plans: r.planHistory?.length ? planTimeline(r) : [],
           nextDate: next?.date ?? null,
           // The month of the next draw's period: where a new price starts by default.
           nextPeriod: next ? periodMonth(r, next.period) : null,
@@ -386,6 +400,10 @@ export function recurringExpenseRoutes(db: Db) {
       }
     }
     const before = db.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get();
+    if (before && typeof v.nextFrom === "string") {
+      const wrong = planSwitchError(before, v.nextFrom);
+      if (wrong) return c.json({ error: wrong }, 400);
+    }
     // A part follows its owner's day and account, and has no text of its own to match.
     if (before?.partOfId != null && v.partOfId !== null) for (const k of [...FOLLOWED_FIELDS, "matchPattern"] as const) delete v[k];
     if (before) fromMonthDefaults(db, before, v, todayLocal());
@@ -423,6 +441,111 @@ export function recurringExpenseRoutes(db: Db) {
       return row && tx.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get();
     });
     return updated ? c.json(updated) : c.json({ error: "Hittades inte." }, 404);
+  });
+
+  /**
+   * 'Byt plan': the subscription is on another plan from a month (upgraded or
+   * downgraded): a new price, often a new draw day, and a name. The plan it
+   * was on is kept for the months before. With the charge that started the
+   * new plan (`transactionId`) that charge is linked to it, even when it came
+   * in a period that already had a charge (249 and then 937 in one month).
+   * A month still to come only waits, like 'Ändra pris från nästa dragning'.
+   */
+  app.post("/:id/change-plan", async (c) => {
+    const id = Number(c.req.param("id"));
+    const b = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const e = db.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get();
+    if (!e) return c.json({ error: "Hittades inte." }, 404);
+    if (e.partOfId !== null) return c.json({ error: "Den ingår i en annan dragning. Byt plan på utgiften den dras tillsammans med." }, 400);
+    const today = todayLocal();
+    const tx = b.transactionId == null ? null : db.select().from(transactions).where(eq(transactions.id, Number(b.transactionId))).get();
+    if (b.transactionId != null) {
+      if (!tx || tx.deletedAt) return c.json({ error: "Transaktionen finns inte." }, 400);
+      if (tx.amount >= 0 || tx.isTransfer) return c.json({ error: "Bara ett köp kan starta en ny plan." }, 400);
+      if (tx.recurringExpenseId !== null && tx.recurringExpenseId !== id) return c.json({ error: "Köpet hör redan till en annan fast utgift." }, 400);
+    }
+    const from = b.from ?? (tx ? chargeDate(e, tx).slice(0, 7) : null);
+    if (typeof from !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(from)) return c.json({ error: "Månaden planen börjar ska vara ÅÅÅÅ-MM." }, 400);
+    const positive = (v: unknown) => v === undefined || v === null || (Number.isInteger(v) && (v as number) > 0);
+    if (!positive(b.amount) || !positive(b.foreignAmount)) return c.json({ error: "Det nya priset ska vara ett positivt belopp." }, 400);
+    if (b.anchorDay != null && (!Number.isInteger(b.anchorDay) || (b.anchorDay as number) < 1 || (b.anchorDay as number) > 31)) return c.json({ error: "Dag ska vara 1–31." }, 400);
+    const name = typeof b.name === "string" ? b.name.trim() : "";
+    if (name.length > PLAN_NAME_MAX) return c.json({ error: `Namnet på planen får vara högst ${PLAN_NAME_MAX} tecken.` }, 400);
+    // Priced in a currency, the new price is before VAT in that currency; else in kronor.
+    const amount = e.currency ? null : ((b.amount as number | null | undefined) ?? null);
+    const foreignAmount = e.currency ? ((b.foreignAmount as number | null | undefined) ?? null) : null;
+    if (amount === null && foreignAmount === null && b.anchorDay == null) {
+      return c.json({ error: e.currency ? `Ange det nya priset i ${e.currency}, utan moms, eller en ny dag.` : "Ange det nya beloppet eller en ny dag." }, 400);
+    }
+    const wrong = planSwitchError(e, from);
+    if (wrong) return c.json({ error: wrong }, 400);
+    const coming = !tx && from > monthOf(today);
+    if (coming && b.anchorDay != null) return c.json({ error: "En ny dag går att ange först när planen har börjat, från dragningen som startade den." }, 400);
+    if (tx && e.accountId !== null && tx.accountId !== accountFor(e, from)) return c.json({ error: "Köpet är draget från ett annat konto än utgiften." }, 400);
+
+    const row = db.transaction((txn) => {
+      const d = txn as unknown as Db;
+      const stamp = { manuallyEditedAt: new Date().toISOString() };
+      if (coming) {
+        const r = d
+          .update(recurringExpenses)
+          .set({ nextFrom: from, nextAmount: amount, nextForeignAmount: foreignAmount, nextPlanName: name || null, ...stamp })
+          .where(eq(recurringExpenses.id, id))
+          .returning()
+          .get();
+        priceInKronor(d, r);
+        return d.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get()!;
+      }
+      const switched = switchPlan(d, e, { from, amount, foreignAmount, anchorDay: (b.anchorDay as number | null | undefined) ?? null, name: name || null });
+      d.update(recurringExpenses).set(stamp).where(eq(recurringExpenses.id, id)).run();
+      if (tx) {
+        // The charge that started the plan is its own, whatever else the linking finds.
+        const share = groupShared(d, chargeOwnerId(switched)) && !tx.private && !tx.forOther;
+        d.update(transactions).set({ recurringExpenseId: id, ...(share ? { shared: true } : {}) }).where(eq(transactions.id, tx.id)).run();
+      }
+      linkRecurring(d);
+      return d.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get()!;
+    });
+    return c.json(row);
+  });
+
+  /**
+   * Takes the latest plan change back: the plan before is the one it is on
+   * again. The charges stay as linked, except the one named in `transactionId`
+   * (the charge that started the plan, when it was changed from it).
+   */
+  app.post("/:id/undo-plan-change", async (c) => {
+    const id = Number(c.req.param("id"));
+    const b = (await c.req.json().catch(() => ({}))) as { transactionId?: unknown };
+    const e = db.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get();
+    if (!e) return c.json({ error: "Hittades inte." }, 404);
+    const history = e.planHistory ?? [];
+    const last = history.at(-1);
+    if (!last) return c.json({ error: "Den har inte bytt plan." }, 400);
+    const row = db.transaction((txn) => {
+      const d = txn as unknown as Db;
+      const r = d
+        .update(recurringExpenses)
+        .set({
+          planHistory: history.slice(0, -1),
+          amount: last.amount,
+          foreignAmount: last.foreignAmount,
+          scheduleType: last.scheduleType,
+          anchorDay: last.anchorDay,
+          bankDayRule: last.bankDayRule,
+          planName: last.name,
+          manuallyEditedAt: new Date().toISOString(),
+        })
+        .where(eq(recurringExpenses.id, id))
+        .returning()
+        .get();
+      if (r.currency) priceInKronor(d, r);
+      if (Number.isInteger(b.transactionId)) {
+        d.update(transactions).set({ recurringExpenseId: null }).where(and(eq(transactions.id, b.transactionId as number), eq(transactions.recurringExpenseId, id))).run();
+      }
+      return d.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get()!;
+    });
+    return c.json(row);
   });
 
   // "Beloppet har ändrats": take the latest charge as the new amount. Only on request.

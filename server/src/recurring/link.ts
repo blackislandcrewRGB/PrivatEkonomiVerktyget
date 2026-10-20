@@ -1,6 +1,6 @@
 import { and, eq, isNotNull, isNull, lt, gt, ne } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { applyPriceChanges } from "./priceChange.js";
+import { applyPriceChanges, priceFor } from "./priceChange.js";
 import { recurringExpenses, recurringIncome, recurringIncomeOverrides, transactions } from "../db/schema.js";
 import { salaryForecasts } from "../salary/salary.js";
 import { merchantText } from "../categorize/counterparty.js";
@@ -194,7 +194,7 @@ function linkExpenses(db: Db): number {
       // On the account of its period (the old card before a move), and not after a last draw.
       if (r.accountId !== accountFor(e, occ.period) || !activeIn(e, occ.period)) continue;
       // The charge pays for the expense and its parts.
-      const whole = e.amount + (parts.get(e.id) ?? []).reduce((s, p) => s + p.amount, 0);
+      const whole = priceFor(e, occ.period) + (parts.get(e.id) ?? []).reduce((s, p) => s + p.amount, 0);
       const amountDiff = Math.abs(Math.abs(r.amount) - whole) / Math.max(whole, 1);
       candidates.push({
         rowId: r.id,

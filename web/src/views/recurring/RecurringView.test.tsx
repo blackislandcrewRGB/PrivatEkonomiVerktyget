@@ -384,7 +384,7 @@ describe("Fasta utgifter", () => {
     await waitFor(() => expect(callsTo(fetchMock, "PATCH", "/recurring-expenses/6").at(-1)?.[1]).toEqual({ currency: null, foreignAmount: null, vatPercent: null }));
   });
 
-  it("a new price from the next draw: the month and the price, in euro before VAT for one priced in euro; shown until it is the price", async () => {
+  it("a new plan from the next draw: the month and the price, in euro before VAT for one priced in euro; shown until it is the plan", async () => {
     expenses = [
       ...expenses,
       expense(6, "Claude", {
@@ -399,23 +399,65 @@ describe("Fasta utgifter", () => {
     renderView();
     await userEvent.click(await screen.findByText("Claude"));
     const panel = await screen.findByRole("dialog", { name: "Claude" });
-    await userEvent.click(within(panel).getByRole("button", { name: "Ändra pris från nästa dragning…" }));
-    const form = within(panel).getByRole("form", { name: "Ändra pris" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Byt plan…" }));
+    const form = within(panel).getByRole("form", { name: "Byt plan" });
     // From the next draw's month by default.
     expect(within(form).getByLabelText("Från månad")).toHaveValue("2026-09");
     await userEvent.selectOptions(within(form).getByLabelText("Från månad"), "2026-10");
     await userEvent.type(within(form).getByLabelText("Nytt pris i EUR utan moms"), "18");
-    await userEvent.click(within(form).getByRole("button", { name: "Spara" }));
-    await waitFor(() => expect(callsTo(fetchMock, "PATCH", "/recurring-expenses/6").at(-1)?.[1]).toEqual({ nextFrom: "2026-10", nextForeignAmount: 1800 }));
+    await userEvent.type(within(form).getByLabelText("Namn på planen"), "Pro");
+    await userEvent.click(within(form).getByRole("button", { name: "Byt plan" }));
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/recurring-expenses/6/change-plan").at(-1)?.[1]).toEqual({ from: "2026-10", foreignAmount: 1800, name: "Pro" }));
     // The server has worked out the kronor.
-    expenses = expenses.map((e) => (e.id === 6 ? { ...e, nextFrom: "2026-10", nextForeignAmount: 1800, nextAmount: 25480 } : e));
+    expenses = expenses.map((e) => (e.id === 6 ? { ...e, nextFrom: "2026-10", nextForeignAmount: 1800, nextAmount: 25480, nextPlanName: "Pro" } : e));
     cleanup();
     renderView();
     await userEvent.click(await screen.findByText("Claude"));
     const again = await screen.findByRole("dialog", { name: "Claude" });
-    expect(within(again).getByTestId("price-change").textContent?.replace(/\s/g, " ")).toContain("Från oktober 2026: 255 kr (22,50 € med moms)");
+    expect(within(again).getByTestId("price-change").textContent?.replace(/\s/g, " ")).toContain("Från oktober 2026: Pro · 255 kr (22,50 € med moms)");
     await userEvent.click(within(within(again).getByTestId("price-change")).getByRole("button", { name: "Ta bort" }));
     await waitFor(() => expect(callsTo(fetchMock, "PATCH", "/recurring-expenses/6").at(-1)?.[1]).toEqual({ nextFrom: null }));
+  });
+
+  it("the plans it has been on: each with its price, day and months; a plan begun already takes a new day; the latest change can be taken back", async () => {
+    expenses = [
+      ...expenses,
+      expense(8, "ChatGPT", {
+        amount: 93700,
+        anchorDay: 6,
+        planName: "Pro",
+        nextPeriod: MONTH,
+        plans: [
+          { from: null, until: "2025-12", plan: { amount: 24900, foreignAmount: null, anchorDay: 28, scheduleType: "day_of_month", name: null } },
+          { from: "2026-01", until: null, plan: { amount: 93700, foreignAmount: null, anchorDay: 6, scheduleType: "day_of_month", name: "Pro" } },
+        ],
+      }),
+    ];
+    renderView();
+    await userEvent.click(await screen.findByText("ChatGPT"));
+    const panel = await screen.findByRole("dialog", { name: "ChatGPT" });
+    const plans = within(panel).getByTestId("plans");
+    const rows = within(plans).getAllByRole("listitem").map((li) => li.textContent?.replace(/\s/g, " "));
+    expect(rows[0]).toContain("Pro");
+    expect(rows[0]).toContain("937 kr per månad");
+    expect(rows[0]).toContain("dag 6");
+    expect(rows[0]).toContain("från januari 2026");
+    expect(rows[1]).toContain("249 kr per månad");
+    expect(rows[1]).toContain("dag 28");
+    expect(rows[1]).toContain("till och med december 2025");
+    // Back to 249 from a month that has begun: a new day too.
+    await userEvent.click(within(panel).getByRole("button", { name: "Byt plan…" }));
+    const form = within(panel).getByRole("form", { name: "Byt plan" });
+    // This month's draw is the default: the plan has begun, so the day can change with it.
+    expect(within(form).getByLabelText("Från månad")).toHaveValue(MONTH);
+    await userEvent.type(within(form).getByLabelText("Nytt belopp"), "249");
+    await userEvent.clear(within(form).getByLabelText("Ny dragdag"));
+    await userEvent.type(within(form).getByLabelText("Ny dragdag"), "20");
+    await userEvent.type(within(form).getByLabelText("Namn på planen"), "Plus");
+    await userEvent.click(within(form).getByRole("button", { name: "Byt plan" }));
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/recurring-expenses/8/change-plan").at(-1)?.[1]).toEqual({ from: MONTH, amount: 24900, anchorDay: 20, name: "Plus" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Ångra senaste planbyte" }));
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/recurring-expenses/8/undo-plan-change")).toHaveLength(1));
   });
 
   it("switching an expense to euro starts with 25 % VAT", async () => {

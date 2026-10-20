@@ -30,6 +30,7 @@ import { StatusPill } from "../../components/StatusPill";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/cn";
 import { openTransactions } from "../../shell/openTransactions";
+import { todayIso } from "../../lib/today";
 import { dm, kr } from "../overview/format";
 
 const MONTH_NAMES = ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"];
@@ -189,10 +190,11 @@ export function ExpensePanel({
     >
       <div className="space-y-6 text-sm">
         {expense && !isNew && <StatusBlock e={expense} onMark={onMark} onAcceptAmount={onAcceptAmount} onSave={onSave} />}
-        <Fields key={isNew ? "new" : expense?.id} v={v} self={isNew ? null : expense} expenses={expenses} accounts={accounts} commit={commit} autoFocus={isNew} />
+        <Fields key={isNew ? "new" : expense?.id} v={v} self={isNew ? null : expense} expenses={expenses} accounts={accounts} commit={commit} onChanged={onChanged} autoFocus={isNew} />
         {expense && !isNew && (
           <>
             <ExpenseIcon e={expense} onChanged={onChanged} />
+            <Plans e={expense} onChanged={onChanged} />
             <History e={expense} />
             <RentNotices e={expense} />
             {expense.billingCycle === "monthly" && <SkippedMonths expense={expense} onChanged={onChanged} />}
@@ -367,28 +369,44 @@ function ForeignFields({ v, price, commit }: { v: ExpensePatch; price: ForeignPr
 }
 
 /**
- * 'Ändra pris från nästa dragning': a new price from a month on (a
- * subscription downgraded). The periods before keep the price; once the
- * first charge at the new one has come, it is the price.
+ * 'Byt plan…': the subscription is on another plan from a month (upgraded or
+ * downgraded): a new price, a name and, once the plan has begun, often a new
+ * draw day. The plan it was on keeps the months before. A month still to
+ * come only waits: the periods before keep the price, and once the first
+ * charge at the new one has come, it is the plan.
  */
-function PriceChange({ e, commit }: { e: RecurringExpense; commit: (p: ExpensePatch) => void }) {
+function PlanChange({ e, onChanged }: { e: RecurringExpense; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
-  const start = e.nextPeriod ?? new Date().toISOString().slice(0, 7);
+  const thisMonth = todayIso().slice(0, 7);
+  const start = e.nextPeriod ?? thisMonth;
   const [from, setFrom] = useState(start);
   const [price, setPrice] = useState("");
+  const [name, setName] = useState("");
+  const [day, setDay] = useState("");
   const currency = e.currency ?? null;
-  const months = Array.from({ length: 12 }, (_, i) => addMonth(start, i));
+  // A few months back from the next draw (the plan may have begun already) to a year ahead, after the one it is on began.
+  const began = e.plans?.length ? e.plans[e.plans.length - 1].from : null;
+  const months = Array.from({ length: 16 }, (_, i) => addMonth(start, i - 3)).filter((m) => !began || m > began);
+  const started = from <= thisMonth;
+  const open = () => {
+    setFrom(months.find((m) => m >= start) ?? months[0] ?? start);
+    setPrice("");
+    setName("");
+    setDay(e.anchorDay ? String(e.anchorDay) : "");
+    setEditing(true);
+  };
   if (e.nextFrom) {
     const gross = currency && e.nextForeignAmount ? Math.round(e.nextForeignAmount * (1 + (e.vatPercent ?? 0) / 100)) : null;
     return (
       <Field label="Nytt pris">
         <div className="flex flex-wrap items-center gap-2 rounded-md bg-transfer-soft px-2 py-1 text-transfer" data-testid="price-change">
           <span className="min-w-0 flex-1">
-            Från {monthText(e.nextFrom)}: <span className="font-medium tabular-nums">{e.nextAmount ? kr(e.nextAmount) : "–"}</span>
+            Från {monthText(e.nextFrom)}: {e.nextPlanName && <span className="font-medium">{e.nextPlanName} · </span>}
+            <span className="font-medium tabular-nums">{e.nextAmount ? kr(e.nextAmount) : "–"}</span>
             {gross !== null && currency && ` (${money(gross, currency)} med moms)`}
-            <span className="block text-xs opacity-80">Blir priset när den första dragningen till det nya priset har kommit.</span>
+            <span className="block text-xs opacity-80">Blir planen när den första dragningen till det nya priset har kommit.</span>
           </span>
-          <Button size="sm" variant="ghost" onClick={() => commit({ nextFrom: null })}>
+          <Button size="sm" variant="ghost" onClick={() => void sendJson("PATCH", `/recurring-expenses/${e.id}`, { nextFrom: null }).then(onChanged)}>
             Ta bort
           </Button>
         </div>
@@ -398,26 +416,38 @@ function PriceChange({ e, commit }: { e: RecurringExpense; commit: (p: ExpensePa
   if (!editing) {
     return (
       <Field label="">
-        <button type="button" className="text-left text-sm text-link hover:underline" onClick={() => (setFrom(start), setPrice(""), setEditing(true))}>
-          Ändra pris från nästa dragning…
+        <button type="button" className="text-left text-sm text-link hover:underline" onClick={open}>
+          Byt plan…
         </button>
       </Field>
     );
   }
-  const save = () => {
+  const save = async () => {
     const amount = parseKr(price);
     if (!amount || amount <= 0) return notify({ text: currency ? `Skriv det nya priset i ${currency}, utan moms.` : "Skriv det nya beloppet i kronor." });
-    commit(currency ? { nextFrom: from, nextForeignAmount: amount } : { nextFrom: from, nextAmount: amount });
-    setEditing(false);
+    const anchorDay = started && day.trim() ? Number(day) : undefined;
+    if (anchorDay !== undefined && !(Number.isInteger(anchorDay) && anchorDay >= 1 && anchorDay <= 31)) return notify({ text: "Dagen ska vara 1–31." });
+    try {
+      await sendJson("POST", `/recurring-expenses/${e.id}/change-plan`, {
+        from,
+        ...(currency ? { foreignAmount: amount } : { amount }),
+        ...(anchorDay !== undefined && anchorDay !== e.anchorDay ? { anchorDay } : {}),
+        ...(name.trim() ? { name: name.trim() } : {}),
+      });
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      notify({ text: (err as Error).message });
+    }
   };
   return (
-    <Field label="Nytt pris" top>
+    <Field label="Byt plan" top>
       <form
-        aria-label="Ändra pris"
+        aria-label="Byt plan"
         className="space-y-2 rounded-md border border-border p-2"
         onSubmit={(ev) => {
           ev.preventDefault();
-          save();
+          void save();
         }}
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -442,9 +472,23 @@ function PriceChange({ e, commit }: { e: RecurringExpense; commit: (p: ExpensePa
           />
           <span className="text-muted">{currency ? `${SYMBOL[currency]} utan moms (+${e.vatPercent ?? 0} %)` : "kr"}</span>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input aria-label="Namn på planen" placeholder="Planens namn (valfritt)" className={cn(input, "w-52 max-w-full")} value={name} onChange={(ev) => setName(ev.target.value)} />
+          {started && (
+            <>
+              <span className="text-muted">dras den</span>
+              <input aria-label="Ny dragdag" inputMode="numeric" className={cn(input, "w-14 text-right tabular-nums")} value={day} onChange={(ev) => setDay(ev.target.value)} />
+            </>
+          )}
+        </div>
+        <p className="text-xs text-muted">
+          {started
+            ? "Månaderna före behåller sitt pris och sin dag. En dragning som startade planen kopplas från köpet i Transaktioner."
+            : "Månaderna före behåller priset. Planen börjar gälla när den första dragningen till det nya priset har kommit."}
+        </p>
         <div className="flex gap-2">
           <Button type="submit" size="sm" variant="primary">
-            Spara
+            Byt plan
           </Button>
           <Button type="button" size="sm" onClick={() => setEditing(false)}>
             Avbryt
@@ -455,12 +499,54 @@ function PriceChange({ e, commit }: { e: RecurringExpense; commit: (p: ExpensePa
   );
 }
 
+/** The plans it has been on, with the months each held, and 'Ångra senaste planbyte'. */
+function Plans({ e, onChanged }: { e: RecurringExpense; onChanged: () => void }) {
+  const plans = e.plans ?? [];
+  if (plans.length === 0) return null;
+  const undo = async () => {
+    try {
+      await sendJson("POST", `/recurring-expenses/${e.id}/undo-plan-change`, {});
+      onChanged();
+    } catch (err) {
+      notify({ text: (err as Error).message });
+    }
+  };
+  return (
+    <section data-testid="plans">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Planer</h3>
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {[...plans].reverse().map((p, i) => {
+          const now = p.until === null;
+          const price = e.billingCycle === "yearly" ? "per år" : "per månad";
+          return (
+            <li key={p.from ?? "first"} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-1.5">
+              <span className={cn("font-medium", !now && "text-muted")}>{p.plan.name ?? (now ? "Nuvarande plan" : `Plan ${plans.length - i}`)}</span>
+              <span className="tabular-nums">
+                {kr(p.plan.amount)} {price}
+              </span>
+              {p.plan.anchorDay && p.plan.scheduleType === "day_of_month" && <span className="text-muted">dag {p.plan.anchorDay}</span>}
+              <span className="flex-1 text-right text-xs text-muted">
+                {p.from ? `från ${monthText(p.from)}` : "tidigare"}
+                {p.until && ` till och med ${monthText(p.until)}`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <button type="button" onClick={() => void undo()} className="mt-1 text-xs text-muted hover:text-foreground">
+        Ångra senaste planbyte
+      </button>
+    </section>
+  );
+}
+
 function Fields({
   v,
   self,
   expenses,
   accounts,
   commit,
+  onChanged,
   autoFocus,
 }: {
   v: ExpensePatch;
@@ -468,6 +554,7 @@ function Fields({
   expenses: RecurringExpense[];
   accounts: Account[];
   commit: (p: ExpensePatch) => void;
+  onChanged: () => void;
   autoFocus: boolean;
 }) {
   const [picker, setPicker] = useState<HTMLElement | null>(null);
@@ -511,7 +598,7 @@ function Fields({
           </div>
         </Field>
       )}
-      {self && <PriceChange e={self} commit={commit} />}
+      {self && <PlanChange e={self} onChanged={onChanged} />}
       <Field label="Dragning" top>
         <div className="space-y-1">
           <select
@@ -913,7 +1000,7 @@ function History({ e }: { e: RecurringExpense }) {
     return () => {
       live = false;
     };
-  }, [e.id, e.amount, e.linkedCount, e.matchPattern, e.anchorDay, e.scheduleType]);
+  }, [e.id, e.amount, e.linkedCount, e.matchPattern, e.anchorDay, e.scheduleType, e.plans?.length]);
   if (!h) return null;
   const max = Math.max(1, ...h.months.flatMap((m) => [m.charged ?? 0, e.billingCycle === "monthly" ? m.expected : 0]));
   const shown = all ? h.charges : h.charges.slice(0, 5);
@@ -922,18 +1009,20 @@ function History({ e }: { e: RecurringExpense }) {
       <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">Dragningar, 12 månader</h3>
       <div className="flex h-20 items-end gap-1" role="img" aria-label="Draget per månad de senaste 12 månaderna">
         {h.months.map((m) => {
-          const off = m.charged !== null && e.billingCycle === "monthly" && m.charged !== m.expected;
+          // The month a new plan began often has two charges, the old plan's and the new one's: not a deviation.
+          const twoPlans = !!m.planChange && (m.charges ?? 0) > 1;
+          const off = m.charged !== null && e.billingCycle === "monthly" && m.charged !== m.expected && !twoPlans;
           return (
             <div
               key={m.month}
               className="relative flex h-full flex-1 flex-col justify-end"
-              title={`${m.month}: ${m.charged !== null ? `dragen ${kr(m.charged)}` : "ingen dragning"}${e.billingCycle === "monthly" ? `, väntat ${kr(m.expected)}` : ""}`}
+              title={`${m.month}: ${m.charged !== null ? `dragen ${kr(m.charged)}` : "ingen dragning"}${e.billingCycle === "monthly" ? `, väntat ${kr(m.expected)}` : ""}${m.plan ? `, ${m.plan}` : ""}${m.planChange ? `, ny plan${twoPlans ? ` (${m.charges} dragningar)` : ""}` : ""}`}
             >
               {e.billingCycle === "monthly" && (
                 <span className="absolute inset-x-0 border-t border-dashed border-muted/60" style={{ bottom: `${(m.expected / max) * 100}%` }} />
               )}
               <span
-                className={cn("rounded-sm", m.charged === null ? "h-0.5 bg-border" : off ? "bg-warning" : "bg-foreground/50")}
+                className={cn("rounded-sm", m.charged === null ? "h-0.5 bg-border" : off ? "bg-warning" : m.planChange ? "bg-transfer" : "bg-foreground/50")}
                 style={m.charged !== null ? { height: `${Math.max(4, (m.charged / max) * 100)}%` } : undefined}
               />
             </div>
@@ -1095,8 +1184,8 @@ function MonthAmounts({ expense: e, onChanged }: { expense: RecurringExpense; on
     const ore = trimmed ? parseKr(trimmed) : null;
     if (trimmed && !ore) return setError(`Ogiltigt belopp för ${month}.`);
     const current = months?.find((m) => m.month === month)?.amount ?? null;
-    // Typing the usual amount clears the month's own amount.
-    const amount = ore === e.amount ? null : ore;
+    // Typing the usual amount (the plan's price for the month) clears the month's own amount.
+    const amount = ore === (months?.find((m) => m.month === month)?.usual ?? e.amount) ? null : ore;
     if (amount === current) return;
     try {
       await sendJson("PUT", `/recurring-expenses/${e.id}/amounts/${month}`, { amount });
@@ -1124,11 +1213,14 @@ function MonthAmounts({ expense: e, onChanged }: { expense: RecurringExpense; on
           ›
         </Button>
       </div>
-      <p className="mb-2 text-xs text-muted">Tomt fält = standardbeloppet {kr(e.amount)}. Används i prognosen, avstämningen och kontrollen av ändrat belopp.</p>
+      <p className="mb-2 text-xs text-muted">
+        Tomt fält = {e.plans?.length ? "planens pris för månaden" : `standardbeloppet ${kr(e.amount)}`}. Används i prognosen, avstämningen och kontrollen av ändrat belopp.
+      </p>
       <div className="grid grid-cols-4 gap-1.5">
         {months?.map((m) => {
           const past = m.month < thisMonth;
-          const off = m.charged !== null && m.charged !== m.expected;
+          // The month a new plan began often has two charges, the old plan's and the new one's: not a deviation.
+          const off = m.charged !== null && m.charged !== m.expected && !(m.planChange && (m.charges ?? 0) > 1);
           return (
             <label
               key={m.month}
@@ -1138,7 +1230,7 @@ function MonthAmounts({ expense: e, onChanged }: { expense: RecurringExpense; on
               <MonthInput
                 label={`Belopp ${m.month}`}
                 value={m.amount === null ? "" : String(m.amount / 100).replace(".", ",")}
-                placeholder={String(e.amount / 100).replace(".", ",")}
+                placeholder={String((m.usual ?? e.amount) / 100).replace(".", ",")}
                 onCommit={(t) => save(m.month, t)}
               />
               <span className={cn("block text-[10px] tabular-nums", off ? "text-warning" : "text-subtle")}>{m.charged !== null ? `dragen ${kr(m.charged)}` : " "}</span>

@@ -5,6 +5,7 @@ import { chargeDate, nearestOccurrence } from "./schedule.js";
 import { chargeOwnerId, chargeShare, partsByOwner } from "./parts.js";
 import { withVat } from "./foreignPrice.js";
 import { foreignAmountFor, priceFor } from "./priceChange.js";
+import { planAt, planTimeline } from "./plans.js";
 
 type Expense = typeof recurringExpenses.$inferSelect;
 
@@ -21,7 +22,7 @@ export function chargePeriod(e: Pick<Expense, "scheduleType" | "anchorDay" | "ba
  */
 export function expectedAmounts(
   db: Db,
-): (e: Pick<Expense, "id" | "amount"> & Partial<Pick<Expense, "nextFrom" | "nextAmount" | "anchorMonth">>, month: string) => number {
+): (e: Pick<Expense, "id" | "amount"> & Partial<Pick<Expense, "nextFrom" | "nextAmount" | "anchorMonth" | "planHistory">>, month: string) => number {
   const byKey = new Map(db.select().from(recurringExpenseAmounts).all().map((r) => [`${r.recurringExpenseId}|${r.month}`, r.amount]));
   // A new price from a period on (priceChange.ts) counts from then.
   return (e, month) => byKey.get(`${e.id}|${month}`) ?? priceFor(e, month);
@@ -104,12 +105,19 @@ export function monthsOfYear(db: Db, e: Expense, year: number, expected = expect
     .from(transactions)
     .where(and(eq(transactions.recurringExpenseId, chargeOwnerId(e)), isNull(transactions.deletedAt)))
     .all();
+  const began = new Set(planTimeline(e).flatMap((p) => (p.from ? [p.from] : [])));
   return Array.from({ length: 12 }, (_, i) => {
     const month = `${year}-${String(i + 1).padStart(2, "0")}`;
     const charged = charges.filter((c) => chargePeriod(e, c) === month);
     return {
       month,
+      // The plan the month is on (Plus, Pro), and whether it began a new one: the month of a change often has two charges, the old plan's and the new one's.
+      plan: planAt(e, month).name,
+      planChange: began.has(month),
+      charges: charged.length,
       amount: own.get(month) ?? null,
+      // What the month costs when it has no amount of its own: its plan's price.
+      usual: priceFor(e, month),
       expected: own.get(month) ?? priceFor(e, month),
       charged: charged.length ? chargeShare(e, parts, expected, charged.reduce((s, c) => s - c.amount, 0), month) : null,
     };

@@ -18,6 +18,7 @@ import { cn } from "../../lib/cn";
 import { NoteInput, ReturnPanel } from "./editors";
 import { TxItems } from "./TxItems";
 import { TxReceipt } from "./TxReceipt";
+import { PlanChangeFromCharge } from "./PlanChange";
 import { canShare, ownerOf, type Owner, type TxActions } from "./useTxActions";
 import type { PageContext } from "./TransactionsPage";
 
@@ -434,6 +435,7 @@ function PanelBody({
               // A subscription started for a while: the tool can't cancel it,
               // but it can ask in time, before it takes money again.
               <>
+                <PlanChangeFromCharge row={r} foreign={details ? { amount: details.foreignAmount, currency: details.foreignCurrency } : null} onChanged={onChanged} />
                 <button onClick={() => void watchCharge()} disabled={watching} className="flex items-center gap-2 text-muted hover:text-foreground">
                   <BellRing className="size-4" /> Påminn innan nästa dragning…
                 </button>

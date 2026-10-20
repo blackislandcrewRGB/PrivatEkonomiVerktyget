@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { accounts, categories, contacts, duplicateDismissals, merchantRules, recurringExpenses, transactions, TRANSACTION_SOURCES } from "../db/schema.js";
 import { linkRecurring } from "../recurring/link.js";
 import { WatchChargeError, makeRecurring, recurringDraft, watchCharge } from "../recurring/watchCharge.js";
+import { planCandidates } from "../recurring/planCandidates.js";
 import { RuleError, previewRule, ruleExamples, saveRule, suggestRule, undoRule, updateRule, type RuleSpec } from "../categorize/ruleService.js";
 import { isIsoDate } from "../import/text.js";
 import { cardInvoicePeriod, postedDaySql } from "../shared/settlement.js";
@@ -708,6 +709,8 @@ export function transactionRoutes(db: Db) {
       throw e;
     }
   });
+  /** 'Byt plan för …': the fixed expenses this purchase may be a new plan of (changing it is POST /recurring-expenses/:id/change-plan). */
+  app.get("/:id/plan-candidates", (c) => c.json(planCandidates(db, Number(c.req.param("id")))));
   app.post("/:id/make-recurring", async (c) => {
     const b = (await c.req.json().catch(() => ({}))) as { name?: unknown; cycle?: unknown; pattern?: unknown };
     if (typeof b.name !== "string" || typeof b.pattern !== "string" || (b.cycle !== "monthly" && b.cycle !== "yearly")) {

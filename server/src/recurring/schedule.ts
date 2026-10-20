@@ -1,9 +1,13 @@
 import type { recurringExpenses, transactions } from "../db/schema.js";
 import { nextBankDay, previousBankDay } from "../calendar/bankDays.js";
+import { pastPlanAt } from "./plans.js";
 
 type Expense = typeof recurringExpenses.$inferSelect;
-/** Without billingCycle (or 'monthly'): drawn every month. Yearly: once a year, in anchorMonth. */
-export type Schedule = Pick<Expense, "scheduleType" | "anchorDay" | "bankDayRule"> & Partial<Pick<Expense, "billingCycle" | "anchorMonth">>;
+/**
+ * Without billingCycle (or 'monthly'): drawn every month. Yearly: once a year, in anchorMonth.
+ * With planHistory the day of a month before a plan change is the plan's then (plans.ts).
+ */
+export type Schedule = Pick<Expense, "scheduleType" | "anchorDay" | "bankDayRule"> & Partial<Pick<Expense, "billingCycle" | "anchorMonth" | "planHistory">>;
 type Charge = Pick<typeof transactions.$inferSelect, "bookingDate" | "transactionDate" | "postedDate">;
 
 /** A linked charge within this many days of the predicted date is on schedule. */
@@ -40,12 +44,13 @@ export function addMonthsToPeriod(period: string, n: number): string {
  * March), and still belongs to the month it is for. Null when no day is known.
  */
 export function occurrenceInMonth(e: Schedule, year: number, month1: number): string | null {
+  const plan = pastPlanAt(e, `${year}-${pad(month1)}`) ?? e;
   // The same schedule and month always give the same day: suggestSchedule asks 96 schedules about every charge.
-  const key = `${e.scheduleType}|${e.anchorDay}|${e.bankDayRule}|${year}|${month1}`;
+  const key = `${plan.scheduleType}|${plan.anchorDay}|${plan.bankDayRule}|${year}|${month1}`;
   let date = occurrences.get(key);
   if (date === undefined) {
     if (occurrences.size >= MAX_KEPT_OCCURRENCES) occurrences.clear();
-    occurrences.set(key, (date = computeOccurrence(e, year, month1)));
+    occurrences.set(key, (date = computeOccurrence(plan, year, month1)));
   }
   return date;
 }
@@ -53,7 +58,7 @@ export function occurrenceInMonth(e: Schedule, year: number, month1: number): st
 const occurrences = new Map<string, string | null>();
 const MAX_KEPT_OCCURRENCES = 50_000;
 
-function computeOccurrence(e: Schedule, year: number, month1: number): string | null {
+function computeOccurrence(e: Pick<Schedule, "scheduleType" | "anchorDay" | "bankDayRule">, year: number, month1: number): string | null {
   const last = daysInMonth(year, month1);
   let day: number;
   if (e.scheduleType === "last_day") day = last;
