@@ -483,6 +483,27 @@ describe("notes", () => {
     await waitFor(() => expect(callsTo(fetchMock, "POST", "/recurring-expenses/7/undo-plan-change")).toEqual([["/api/recurring-expenses/7/undo-plan-change", { transactionId: chatgpt.id }]]));
   });
 
+  it("an upgrade charge that is only the difference: one click makes the plan's price the old price plus the charge", async () => {
+    const chatgpt = tx("2026-10-06", "OPENAI *CHATGPT SUBSCR", -93700);
+    rows = [chatgpt];
+    renderView();
+    await userEvent.click(await screen.findByText("OPENAI *CHATGPT SUBSCR"));
+    const panel = await screen.findByRole("dialog");
+    await userEvent.click(await within(panel).findByRole("button", { name: "Byt plan för ChatGPT…" }));
+    const form = within(panel).getByRole("form", { name: "Byt plan" });
+    // The charge is the price to start with.
+    expect(within(form).getByLabelText("Planens pris")).toHaveValue("937");
+    await userEvent.click(within(form).getByRole("button", { name: /Köpet är bara mellanskillnaden/ }));
+    expect(within(form).getByLabelText("Planens pris")).toHaveValue("1186");
+    expect(form.textContent?.replace(/\s/g, " ")).toContain("Månaden planen börjar väntas på 937,00 kr, det som drogs. Därefter väntas 1 186,00 kr.");
+    await userEvent.click(within(form).getByRole("button", { name: "Byt plan" }));
+    await waitFor(() =>
+      expect(callsTo(fetchMock, "POST", "/recurring-expenses/7/change-plan")).toEqual([
+        ["/api/recurring-expenses/7/change-plan", { transactionId: chatgpt.id, from: "2026-10", anchorDay: 6, amount: 118600 }],
+      ]),
+    );
+  });
+
   it("renaming one row asks whether new imports with that text should get the name too; R saves the name rule", async () => {
     renderView();
     await screen.findByText("ICA KVANTUM");

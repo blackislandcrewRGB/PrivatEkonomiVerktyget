@@ -117,7 +117,7 @@ export function SalaryView() {
       <div className="@container">
         <div className="grid gap-4 @[56rem]:grid-cols-12">
           <div className={cn("flex min-w-0 [&>*]:flex-1", info.vacationPayout ? "@[56rem]:col-span-7" : "@[56rem]:col-span-12")}>
-            <NextSalary info={info} months={months} next={next} forecast={hero} onAdd={toForm} />
+            <NextSalary info={info} months={months} next={next} forecast={hero} spec={info.payslips.find((p) => p.workMonth === next && p.payDate >= info.today) ?? null} onAdd={toForm} />
           </div>
           {info.vacationPayout && (
             <div className="flex min-w-0 @[56rem]:col-span-5 [&>*]:flex-1">

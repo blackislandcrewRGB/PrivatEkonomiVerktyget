@@ -1344,7 +1344,7 @@ export interface Overview {
     override: number | null;
     estimate: number;
     /** Löneprognos for the month (hours entered under Lön). */
-    forecast: { workMonth: string; payDate: string; gross: number; net: number; hours: number; vacationHours: number; vacationPayout?: number; assumed?: boolean } | null;
+    forecast: { workMonth: string; payDate: string; gross: number; net: number; hours: number; vacationHours: number; vacationPayout?: number; assumed?: boolean; fromSpec?: boolean } | null;
     late: boolean;
     received: { month: string; bookingDate: string; availableDate?: string; amount: number; forecast: number | null; diff: number | null } | null;
     /** Booked but not yet in the balance (Swedbank books the salary the day before): the next salary until availableDate. */

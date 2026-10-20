@@ -566,6 +566,26 @@ describe("Översikt", () => {
     expect(row.getAttribute("aria-label")?.replace(/\s/g, " ")).toBe("e-sparkonto: −7 899 kr dras 20/9–25/9, före lönen 23/10, 2 st");
   });
 
+  it("a payslip read in for the month is what the next salary says: its amount, and a way to Lön", async () => {
+    const data = overview();
+    data.payday = {
+      ...data.payday!,
+      date: "2026-10-23",
+      month: "2026-10",
+      daysUntil: 3,
+      expected: 2380228,
+      expectedSource: "forecast",
+      forecast: { workMonth: "2026-09", payDate: "2026-10-23", gross: 2940728, net: 2380228, hours: 147, vacationHours: 0, fromSpec: true },
+    };
+    routes["GET /overview"] = data;
+    renderOverview();
+    const line = await screen.findByTestId("salary-line");
+    expect(line.textContent?.replace(/\s/g, " ")).toContain("+23 802 kr (enligt lönespecen för september · Lön)");
+    expect(line.textContent).not.toContain("prognos");
+    await userEvent.click(within(line).getByRole("button", { name: "Lön" }));
+    expect(navigated).toHaveBeenCalledWith("salary");
+  });
+
   it("the salary received this month, against the forecast", async () => {
     const data = overview();
     data.payday = { ...data.payday!, date: "2026-10-23", month: "2026-10", daysUntil: 34, received: { month: "2026-09", bookingDate: "2026-09-19", amount: 2620000, forecast: 2620000, diff: 0 } };

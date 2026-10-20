@@ -23,7 +23,7 @@ import { applyExpenseShared, linkRecurring } from "../recurring/link.js";
 import { chargePeriod, expectedAmounts, latestChargeCheck, monthsOfYear } from "../recurring/amounts.js";
 import { foreignPrice, priceInKronor } from "../recurring/foreignPrice.js";
 import { applyPriceChanges, planSwitchError, switchPlan } from "../recurring/priceChange.js";
-import { currentPlanFrom, planTimeline } from "../recurring/plans.js";
+import { currentPlanFrom, monthAfter, planTimeline } from "../recurring/plans.js";
 import { chargeOwnerId, FOLLOWED_FIELDS, followOwner, groupShared, partsByOwner } from "../recurring/parts.js";
 import { ImportParseError } from "../import/swedbank.js";
 import { iconResolver, iconUrl } from "../icons/icons.js";
@@ -499,6 +499,14 @@ export function recurringExpenseRoutes(db: Db) {
       const switched = switchPlan(d, e, { from, amount, foreignAmount, anchorDay: (b.anchorDay as number | null | undefined) ?? null, name: name || null });
       d.update(recurringExpenses).set(stamp).where(eq(recurringExpenses.id, id)).run();
       if (tx) {
+        // Upgrading from a plan often costs only the difference the first time (937 kr on top of 249 kr
+        // for a plan of 1 186 kr): that month is expected at what was drawn, the ones after at the plan's price.
+        if (!e.currency && amount !== null && Math.abs(tx.amount) !== amount) {
+          d.insert(recurringExpenseAmounts)
+            .values({ recurringExpenseId: id, month: from, amount: Math.abs(tx.amount) })
+            .onConflictDoUpdate({ target: [recurringExpenseAmounts.recurringExpenseId, recurringExpenseAmounts.month], set: { amount: Math.abs(tx.amount) } })
+            .run();
+        }
         // The charge that started the plan is its own, whatever else the linking finds.
         const share = groupShared(d, chargeOwnerId(switched)) && !tx.private && !tx.forOther;
         d.update(transactions).set({ recurringExpenseId: id, ...(share ? { shared: true } : {}) }).where(eq(transactions.id, tx.id)).run();
@@ -541,6 +549,13 @@ export function recurringExpenseRoutes(db: Db) {
         .get();
       if (r.currency) priceInKronor(d, r);
       if (Number.isInteger(b.transactionId)) {
+        // The month's own amount the change set for that charge goes with it.
+        const first = d.select().from(transactions).where(eq(transactions.id, b.transactionId as number)).get();
+        if (first) {
+          d.delete(recurringExpenseAmounts)
+            .where(and(eq(recurringExpenseAmounts.recurringExpenseId, id), eq(recurringExpenseAmounts.month, monthAfter(last.until)), eq(recurringExpenseAmounts.amount, Math.abs(first.amount))))
+            .run();
+        }
         d.update(transactions).set({ recurringExpenseId: null }).where(and(eq(transactions.id, b.transactionId as number), eq(transactions.recurringExpenseId, id))).run();
       }
       return d.select().from(recurringExpenses).where(eq(recurringExpenses.id, id)).get()!;

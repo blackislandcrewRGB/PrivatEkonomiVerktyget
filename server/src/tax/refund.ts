@@ -87,7 +87,7 @@ function preliminary(db: Db, year: number, today: string): TaxRefund["preliminar
     .filter((p) => p.payDate <= today);
   const inYear = slips.filter((p) => p.payDate.startsWith(`${year}-`));
   const months = new Set(inYear.map((p) => p.payDate.slice(0, 7)));
-  const forecasts = salaryForecasts(db);
+  const forecasts = salaryForecasts(db, today);
   let forecast = 0;
   let forecastMonths = 0;
   let left = 0;

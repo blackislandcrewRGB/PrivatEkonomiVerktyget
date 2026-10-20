@@ -415,6 +415,17 @@ function SalaryAmount({
   const monthName = longMonth(p.month);
   const amount = green(formatKr(round(p.expected), { sign: "always", whole: true }));
   const link = "text-accent hover:text-accent-hover";
+  if (p.forecast?.fromSpec) {
+    return (
+      <>
+        {amount} (enligt lönespecen för {longMonth(p.forecast.workMonth)} ·{" "}
+        <button type="button" onClick={() => onNavigate("salary")} className={link} title="Visa under Lön">
+          Lön
+        </button>
+        )
+      </>
+    );
+  }
   if (p.forecast) {
     return (
       <>

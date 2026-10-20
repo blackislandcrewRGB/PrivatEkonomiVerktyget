@@ -121,7 +121,7 @@ export function salaryActuals(db: Db): Map<string, { bookingDate: string; amount
 export function nextPayday(db: Db, today: string): Payday | null {
   const income = mainIncome(db);
   if (!income) return null;
-  const forecasts = salaryForecasts(db);
+  const forecasts = salaryForecasts(db, today);
 
   const rows = db
     .select({ bookingDate: transactions.bookingDate, transactionDate: transactions.transactionDate, amount: transactions.amount })

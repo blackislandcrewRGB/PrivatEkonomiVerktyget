@@ -658,13 +658,17 @@ export interface SalaryForecast {
   vacationPayout?: number;
   /** No hours entered for the month: a normal month (the working time) with the vacation left. */
   assumed?: boolean;
+  /** The payslip for the month has been read in: its gross, net and pay day, not the model's. */
+  fromSpec?: boolean;
 }
 
 /**
  * The forecast of every month entered, by the month it is paid ('2026-10' for
- * September's work): what Översikten and Kassaflöde use for the salary.
+ * September's work): what Översikten and Kassaflöde use for the salary. A
+ * payslip read in for the month is what it pays (`fromSpec`), also without
+ * hours entered when `today` is given and the pay day hasn't passed.
  */
-export function salaryForecasts(db: Db): Map<string, SalaryForecast> {
+export function salaryForecasts(db: Db, today?: string): Map<string, SalaryForecast> {
   const out = new Map<string, SalaryForecast>();
   const payoutOf = (f: { lines: ModelLine[] }) => f.lines.find((l) => l.code === "semut")?.amount;
   for (const m of listMonths(db)) {
@@ -672,6 +676,15 @@ export function salaryForecasts(db: Db): Map<string, SalaryForecast> {
     if (f) {
       out.set(f.payDate.slice(0, 7), { workMonth: m.month, payDate: f.payDate, gross: f.gross, net: f.net, hours: m.effectiveHours, vacationHours: m.vacationHours, vacationPayout: payoutOf(f) });
     }
+  }
+  // A payslip read in before the pay day (they come a few days ahead) is what the month pays: its figures, not the model's.
+  const lag = getSalarySettings(db).lagMonths;
+  for (const slip of db.select().from(payslips).all()) {
+    const payMonth = slip.payDate.slice(0, 7);
+    const f = out.get(payMonth);
+    if (f) out.set(payMonth, { ...f, payDate: slip.payDate, gross: slip.gross, net: slip.net, fromSpec: true });
+    // Without hours entered for it: still what is coming, until it is paid (and only when asked from a day).
+    else if (today !== undefined && slip.payDate >= today) out.set(payMonth, { workMonth: slip.workMonth ?? addMonths(payMonth, -lag), payDate: slip.payDate, gross: slip.gross, net: slip.net, hours: slip.hoursWorked ?? 0, vacationHours: 0, fromSpec: true });
   }
   // The vacation left lands also when no hours are entered for March: a normal month with it.
   const p = vacationPayout(db);

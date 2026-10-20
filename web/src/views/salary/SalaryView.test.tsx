@@ -304,10 +304,10 @@ const entered = (month: string, payDate: string, opts: { hours?: number; diff?: 
 };
 const AVERAGE = { average: 2380000, gross: 2950000, count: 12, from: "2025-10", to: "2026-09" };
 
-function renderWith(months: SalaryMonth[], today = "2026-09-26") {
+function renderWith(months: SalaryMonth[], today = "2026-09-26", payslips: SalaryOverview["payslips"] = []) {
   fetchMock = mockApi({
     "GET /salary/months": months,
-    "GET /salary": { ...OVERVIEW, today, average: AVERAGE },
+    "GET /salary": { ...OVERVIEW, today, average: AVERAGE, payslips },
     "POST /salary/model": MODEL,
     "PUT /salary/months": {},
     "DELETE /salary/months": { ok: true },
@@ -328,6 +328,33 @@ describe("Lön, Design v2", () => {
     expect(last).toHaveTextContent(/Senast utbetalt · 25\/9\s*24\s080 kr\s*augusti, 157,5 tim · avvek −120\skr/);
     expect(last).toHaveClass("bg-card-inset");
     expect(h.querySelector("[data-box=average]")).toHaveTextContent(/Snitt 12 mån\s*23\s800 kr\s*netto · 29\s500 brutto/);
+  });
+
+  const SPEC: SalaryOverview["payslips"][number] = { id: 9, payDate: "2026-10-23", name: "oktoberspec 2026", workMonth: "2026-09", gross: 2940728, tax: 560500, net: 2380228, hoursWorked: 147, salaryGroup: "b", codes: ["011"] };
+
+  it("a payslip read in for the month: its net and gross are the next salary, with the forecast from the hours beside it", async () => {
+    renderWith([entered("2026-08", "2026-09-25", { diff: 0 }), entered("2026-09", "2026-10-23")], "2026-09-26", [SPEC]);
+    const h = await screen.findByRole("region", { name: /Nästa lön · 23\/10 · enligt lönespecen för september/ });
+    expect(h.querySelector("[data-figure=net]")).toHaveTextContent(/23\s802 kr/);
+    expect(h).toHaveTextContent(/brutto 29\s407 kr · skatt 5\s605 kr/);
+    expect(h.querySelector("[data-spec-forecast]")).toHaveTextContent(/prognosen ur dina timmar: 24\s200 kr \(157,5 tim\)/);
+    // The payslip's hours, not the entered ones.
+    expect(h).toHaveTextContent(/Timmar i september 147/);
+  });
+
+  it("a payslip read in before the hours are entered: its figures, and a way to enter the month", async () => {
+    renderWith([entered("2026-08", "2026-09-25", { diff: 0 })], "2026-09-26", [SPEC]);
+    const h = await screen.findByRole("region", { name: /Nästa lön · 23\/10 · enligt lönespecen för september/ });
+    expect(h.querySelector("[data-figure=net]")).toHaveTextContent(/23\s802 kr/);
+    expect(screen.queryByTestId("no-forecast")).toBeNull();
+    await userEvent.click(within(h).getByRole("button", { name: /Lägg in september för en prognos ur timmarna/ }));
+    expect(screen.getByLabelText("Arbetsmånad")).toHaveValue("2026-09");
+  });
+
+  it("a payslip already paid is not the next salary", async () => {
+    renderWith([entered("2026-08", "2026-09-25", { diff: 0 }), entered("2026-09", "2026-10-23")], "2026-10-24", [SPEC]);
+    await screen.findByRole("region", { name: /Nästa lön/ });
+    expect(screen.queryByText(/enligt lönespecen/)).toBeNull();
   });
 
   it("the latest salary in to the krona is green", async () => {

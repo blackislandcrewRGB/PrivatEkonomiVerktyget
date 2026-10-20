@@ -145,15 +145,15 @@ export interface CashDay {
 
 const dm = (iso: string) => `${Number(iso.slice(8, 10))}/${Number(iso.slice(5, 7))}`;
 
-/** 'prognos, 145 tim', and the vacation left when it is paid with it. */
+/** 'prognos, 145 tim' (and the vacation left when it is paid with it), or 'enligt lönespec' once the payslip is in. */
 const forecastText = (f: SalaryForecast) =>
-  `prognos, ${f.assumed ? "vanlig månad" : `${f.hours.toLocaleString("sv-SE")} tim`}${f.vacationPayout ? " + outtagen semester" : ""}`;
+  f.fromSpec ? "enligt lönespec" : `prognos, ${f.assumed ? "vanlig månad" : `${f.hours.toLocaleString("sv-SE")} tim`}${f.vacationPayout ? " + outtagen semester" : ""}`;
 
 function incomes(db: Db, today: string, horizon: string, bankIds: Set<number>): CashEvent[] {
   const out: CashEvent[] = [];
   // The salary: Löneprognos's net and pay day for months with hours entered.
   const main = mainIncome(db);
-  const forecasts = salaryForecasts(db);
+  const forecasts = salaryForecasts(db, today);
   // The day each account's balance is from: an income booked for a later day isn't in it yet.
   const balanceDay = new Map(db.select({ id: accounts.id, at: accounts.balanceUpdatedAt }).from(accounts).all().map((a) => [a.id, a.at?.slice(0, 10) ?? null]));
   for (const i of db.select().from(recurringIncome).where(eq(recurringIncome.active, true)).all()) {

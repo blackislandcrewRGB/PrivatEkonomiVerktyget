@@ -19,11 +19,16 @@ export interface HeroForecast {
   preview: boolean;
 }
 
+/** The payslip read in for the month the next salary is for: what it pays, before the day. */
+export type SalarySpec = SalaryOverview["payslips"][number];
+
 /**
  * Lön's hero: the next salary's forecast (net in large type, gross and tax
  * beside it), the month's hours against the working time and full time, and
  * two grey boxes: the latest salary in and the average of twelve. While the
- * form is filled in, the forecast being typed.
+ * form is filled in, the forecast being typed. Once the payslip for the month
+ * is read in, its net and gross are the figures ("enligt lönespecen"), with
+ * the forecast from the hours entered beside them.
  * Without a forecast for the month the next salary is for: a way to it.
  */
 export function NextSalary({
@@ -31,6 +36,7 @@ export function NextSalary({
   months,
   next,
   forecast,
+  spec,
   onAdd,
 }: {
   info: SalaryOverview;
@@ -38,6 +44,8 @@ export function NextSalary({
   /** The work month the next salary is for. */
   next: string;
   forecast: HeroForecast | null;
+  /** The payslip for the month, if it has been read in (not while a month is being typed). */
+  spec: SalarySpec | null;
   onAdd: (month: string) => void;
 }) {
   const f = forecast?.model;
@@ -51,23 +59,57 @@ export function NextSalary({
           <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
             <div className="min-w-0">
               <h2 id="next-salary-title" className="text-[13px] font-medium text-ink-2">
-                {forecast.preview ? "Förhandsvisning" : "Nästa lön"} · {dm(f.payDate)} · prognos för {monthOnly(f.workMonth)}
+                {forecast.preview ? "Förhandsvisning" : "Nästa lön"} · {dm(forecast.preview || !spec ? f.payDate : spec.payDate)} ·{" "}
+                {forecast.preview || !spec ? `prognos för ${monthOnly(f.workMonth)}` : `enligt lönespecen för ${monthOnly(f.workMonth)}`}
               </h2>
               <p className="mt-1 text-[52px] font-bold leading-none tracking-[-0.03em] tabular-nums" data-figure="net">
-                <AnimatedNumber value={f.net} format={kr} />
+                <AnimatedNumber value={forecast.preview || !spec ? f.net : spec.net} format={kr} />
               </p>
             </div>
             <div className="pb-1 text-[12px] text-ink-2 @[40rem]:text-right">
-              <p>
-                brutto <b className="font-semibold text-ink tabular-nums">{kr(f.gross)}</b> · skatt {tax}
-              </p>
-              {hourValue(f.thresholds) && <p data-hour-value>{hourValue(f.thresholds)}</p>}
+              {!forecast.preview && spec ? (
+                <>
+                  <p>
+                    brutto <b className="font-semibold text-ink tabular-nums">{kr(spec.gross)}</b> · skatt {kr(spec.tax)}
+                  </p>
+                  <p data-spec-forecast>
+                    prognosen ur dina timmar: {kr(f.net)} ({h(forecast.hours)} tim)
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    brutto <b className="font-semibold text-ink tabular-nums">{kr(f.gross)}</b> · skatt {tax}
+                  </p>
+                  {hourValue(f.thresholds) && <p data-hour-value>{hourValue(f.thresholds)}</p>}
+                </>
+              )}
             </div>
           </div>
 
-          <Hours month={f.workMonth} hours={forecast.hours} shifts={shifts} measure={f.thresholds.hoursPerMonth} full={f.thresholds.fullTimeHours} />
+          <Hours month={f.workMonth} hours={!forecast.preview && spec?.hoursWorked ? spec.hoursWorked : forecast.hours} shifts={shifts} measure={f.thresholds.hoursPerMonth} full={f.thresholds.fullTimeHours} />
           <QuarterOvertime t={f.thresholds} />
         </>
+      ) : spec ? (
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2" data-testid="spec-only">
+          <div className="min-w-0">
+            <h2 id="next-salary-title" className="text-[13px] font-medium text-ink-2">
+              Nästa lön · {dm(spec.payDate)} · enligt lönespecen för {monthOnly(next)}
+            </h2>
+            <p className="mt-1 text-[52px] font-bold leading-none tracking-[-0.03em] tabular-nums" data-figure="net">
+              <AnimatedNumber value={spec.net} format={kr} />
+            </p>
+          </div>
+          <div className="pb-1 text-[12px] text-ink-2 @[40rem]:text-right">
+            <p>
+              brutto <b className="font-semibold text-ink tabular-nums">{kr(spec.gross)}</b> · skatt {kr(spec.tax)}
+              {spec.hoursWorked ? ` · ${h(spec.hoursWorked)} tim` : ""}
+            </p>
+            <button type="button" onClick={() => onAdd(next)} className="font-semibold text-accent hover:underline">
+              Lägg in {monthOnly(next)} för en prognos ur timmarna ›
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="space-y-2">
           <h2 id="next-salary-title" className="text-[13px] font-medium text-ink-2">

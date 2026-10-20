@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { accounts, recurringExpenses, transactions } from "../src/db/schema.js";
-import { chargePeriod, expectedAmounts, monthsOfYear } from "../src/recurring/amounts.js";
+import { accounts, recurringExpenseAmounts, recurringExpenses, transactions } from "../src/db/schema.js";
+import { chargePeriod, expectedAmounts, latestChargeCheck, monthsOfYear } from "../src/recurring/amounts.js";
 import { linkRecurring } from "../src/recurring/link.js";
 import { occurrenceFor } from "../src/recurring/schedule.js";
 import { addMonths, monthOf, todayLocal } from "../src/overview/dates.js";
@@ -71,6 +71,28 @@ describe("byta plan", () => {
     expect(months[9]).toMatchObject({ month: "2026-10", usual: 93700, expected: 93700, charged: 93700, plan: "Pro", planChange: true });
     // Linking again changes nothing.
     expect(linkRecurring(db)).toEqual({ income: 0, expenses: 0 });
+  });
+
+  it("an upgrade that first cost only the difference: the plan is 1 186 kr, the month it began is expected at what was drawn", async () => {
+    const db = freshDb({ seeded: true });
+    const e = chatgpt(db);
+    charge(db, "2026-09-28", 249);
+    const oct = charge(db, "2026-10-06", 937);
+    linkRecurring(db);
+    // 937 kr on top of the 249 kr plan: Pro costs 249 + 937.
+    expect((await post(db, e.id, { transactionId: oct, amount: 118600, anchorDay: 6, name: "Pro" })).status).toBe(200);
+    const now = get(db, e.id);
+    expect(now).toMatchObject({ amount: 118600, anchorDay: 6 });
+    const expected = expectedAmounts(db);
+    expect([expected(now, "2026-09"), expected(now, "2026-10"), expected(now, "2026-11")]).toEqual([24900, 93700, 118600]);
+    const months = monthsOfYear(db, now, 2026);
+    expect(months[9]).toMatchObject({ month: "2026-10", amount: 93700, usual: 118600, expected: 93700, charged: 93700 });
+    // The charge is what its month expected: no 'Beloppet har ändrats'.
+    expect(latestChargeCheck(db, now)).toMatchObject({ expected: 93700, changed: false });
+    // Taken back from the charge: the month's amount goes too.
+    await createApp(db, { databasePath: ":memory:" }).request(`/api/recurring-expenses/${e.id}/undo-plan-change`, json("POST", { transactionId: oct }));
+    expect(db.select().from(recurringExpenseAmounts).all()).toEqual([]);
+    expect(get(db, e.id)).toMatchObject({ amount: 24900 });
   });
 
   it("a change in a month that already had a charge: both count, 249 + 937", async () => {

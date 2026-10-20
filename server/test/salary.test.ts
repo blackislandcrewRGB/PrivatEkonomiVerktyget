@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { payslipLines, payslips, salaryConstants } from "../src/db/schema.js";
+import { payslipLines, payslips, salaryConstants, salaryMonths } from "../src/db/schema.js";
 import { parsePayslip, parseRows, rowsFromPdf } from "../src/salary/hogia.js";
 import type { PdfLine } from "../src/import/pdfText.js";
 import { backtest, constantsFor, deriveConstants, getSalarySettings, importPayslip, storePayslip, modelMonth, obRatesFor, payDateFor, salaryForecasts, setConstant, setMonth, setSalarySettings, vacationPayout, vacationYearEnd } from "../src/salary/salary.js";
@@ -485,6 +485,24 @@ describe("the vacation left at 31 March, paid out", () => {
     expect(vacationPayout(db)).toMatchObject({ hours: 0, amount: 0 });
     expect(salaryForecasts(db).get("2027-04")?.vacationPayout).toBeUndefined();
     expect(() => setSalarySettings(db, { vacationSave: { "2027-04": 5 } })).toThrow("Timmarna att spara ska vara 0–400 per semesterår.");
+  });
+
+  it("a payslip read in before its pay day is what the month pays: its gross, net and day, with or without hours entered", async () => {
+    const db = await withJuly();
+    // The July payslip is paid 2026-07-24; August's work is paid 2026-09-25 and its payslip comes in ahead of it.
+    setMonth(db, "2026-07", { hours: 150 });
+    const model = salaryForecasts(db).get("2026-08")!;
+    expect(model.fromSpec).toBeUndefined();
+    const august = { ...AUGUST(), payDate: "2026-09-25", workMonth: "2026-08", gross: 3000000, net: 2400000, hoursWorked: 147, sha256: "sha-ahead" };
+    storePayslip(db, "ahead.pdf", august);
+    // Hours entered for it: the payslip's figures replace the model's, the hours stay the entered ones.
+    setMonth(db, "2026-08", { hours: 145 });
+    expect(salaryForecasts(db).get("2026-09")).toMatchObject({ workMonth: "2026-08", payDate: "2026-09-25", gross: 3000000, net: 2400000, hours: 145, fromSpec: true });
+    // Without hours: only when asked from a day before its pay day, and not after it was paid.
+    db.delete(salaryMonths).where(eq(salaryMonths.month, "2026-08")).run();
+    expect(salaryForecasts(db).get("2026-09")).toBeUndefined();
+    expect(salaryForecasts(db, "2026-09-21").get("2026-09")).toMatchObject({ workMonth: "2026-08", payDate: "2026-09-25", net: 2400000, hours: 147, fromSpec: true });
+    expect(salaryForecasts(db, "2026-09-26").get("2026-09")).toBeUndefined();
   });
 
   it("once the payslip for March is in, it is paid and nothing more is forecast", async () => {

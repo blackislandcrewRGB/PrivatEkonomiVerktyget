@@ -90,7 +90,7 @@ export function annualIncome(db: Db, today: string): { years: AnnualIncomeYear[]
   }
 
   // This year, month by month.
-  const forecasts = salaryForecasts(db);
+  const forecasts = salaryForecasts(db, today);
   const paidMonths = byYear.get(thisYear) ?? new Map<string, number>();
   const recent = slips
     .sort((a, b) => a.payDate.localeCompare(b.payDate))
