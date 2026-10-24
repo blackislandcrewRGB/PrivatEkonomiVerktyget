@@ -38,6 +38,9 @@ const OVERVIEW: SalaryOverview = {
   taxYears: [2026],
   curve: { points: [{ payDate: "2026-07-24", gross: 3000000, tax: 580000, rate: 0.1933 }], min: 0.1933, max: 0.1933 },
   shifts: { "2026-09": 14, "2026-07": 15 },
+  sickDays: [],
+  sickPeriods: [],
+  sickShiftExtra: {},
   vacationPayout: null,
   average: null,
   pendingChanges: [],
@@ -294,6 +297,7 @@ const entered = (month: string, payDate: string, opts: { hours?: number; diff?: 
     hoursMode: "manual",
     shifts: null,
     hoursFromShifts: null,
+    sick: { hours: 0, karens: 0, days: [] },
     effectiveHours: hours,
     overtimeFromDays: null,
     effectiveOvertimePassHours: 0,
@@ -355,6 +359,46 @@ describe("Lön, Design v2", () => {
     renderWith([entered("2026-08", "2026-09-25", { diff: 0 }), entered("2026-09", "2026-10-23")], "2026-10-24", [SPEC]);
     await screen.findByRole("region", { name: /Nästa lön/ });
     expect(screen.queryByText(/enligt lönespecen/)).toBeNull();
+  });
+
+  it("Sjuk: the month's days with their hours, a period with its karensavdrag, a day added or taken away at once", async () => {
+    const sickDays = [
+      { date: "2026-09-16", hours: 10.5 },
+      { date: "2026-09-17", hours: 10.5 },
+      { date: "2026-09-21", hours: 2 },
+      { date: "2026-10-01", hours: 10.5 },
+    ];
+    fetchMock = mockApi({
+      "GET /salary/months": [entered("2026-08", "2026-09-25", { diff: 0 })],
+      "GET /salary": { ...OVERVIEW, today: "2026-09-26", average: AVERAGE, sickDays, sickPeriods: [{ from: "2026-09-16", to: "2026-09-21", days: sickDays.slice(0, 3), hours: 23 }] },
+      "POST /salary/model": MODEL,
+      "PUT /salary/sick": { sickDays },
+      "DELETE /salary/sick": { sickDays },
+    });
+    render(<SalaryView />);
+    await userEvent.selectOptions(await screen.findByLabelText("Arbetsmånad"), "2026-09");
+    const toggle = screen.getByRole("button", { name: /Sjuk · 23 tim/ });
+    await userEvent.click(toggle);
+    const sick = screen.getByTestId("sick-fields");
+    // This month's days only, with the hours; the period and where its karensavdrag is.
+    expect(within(sick).getByLabelText("Sjuktimmar 2026-09-16")).toHaveValue("10,5");
+    expect(within(sick).getByLabelText("Sjuktimmar 2026-09-21")).toHaveValue("2");
+    expect(within(sick).queryByLabelText("Sjuktimmar 2026-10-01")).toBeNull();
+    expect(sick.querySelector("[data-sick-period]")).toHaveTextContent("Sjukperiod 16/9–21/9 · 23 tim · karensavdrag i september");
+    // Changing the hours saves that day.
+    const two = within(sick).getByLabelText("Sjuktimmar 2026-09-21");
+    await userEvent.clear(two);
+    await userEvent.type(two, "4");
+    await userEvent.tab();
+    await waitFor(() => expect(callsTo(fetchMock, "PUT", "/salary/sick/2026-09-21").at(-1)?.[1]).toEqual({ hours: 4 }));
+    // A day added: the date and, left empty, the hours of a shift.
+    const form = within(sick).getByRole("form", { name: "Lägg till sjukdag" });
+    await userEvent.type(within(form).getByLabelText("Sjukdag"), "2026-09-22");
+    await userEvent.click(within(form).getByRole("button", { name: "Lägg till" }));
+    await waitFor(() => expect(callsTo(fetchMock, "PUT", "/salary/sick/2026-09-22").at(-1)?.[1]).toEqual({ hours: 10.5 }));
+    // Taken away.
+    await userEvent.click(within(sick).getByRole("button", { name: "Ta bort 2026-09-17" }));
+    await waitFor(() => expect(callsTo(fetchMock, "DELETE", "/salary/sick/2026-09-17")).toHaveLength(1));
   });
 
   it("the latest salary in to the krona is green", async () => {

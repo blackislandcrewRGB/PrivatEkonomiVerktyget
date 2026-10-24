@@ -442,6 +442,13 @@
       "when": 1792483455693,
       "tag": "0062_recurring_expense_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "6",
+      "when": 1792830139081,
+      "tag": "0063_sick_days",
+      "breakpoints": true
     }
   ]
 }

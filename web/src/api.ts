@@ -2291,6 +2291,11 @@ export interface SalaryOverview {
   backtest: BacktestRow[];
   /** Pendling's shifts per month. */
   shifts: Record<string, number>;
+  /** Sick leave entered (hours per date), and the periods it makes up: a karensavdrag per period. */
+  sickDays: SickDay[];
+  sickPeriods: SickPeriod[];
+  /** Per month: the sick hours added to the shifts' (sick days not marked as worked in Pendling). */
+  sickShiftExtra: Record<string, number>;
   /** Months with days marked in Pendling: the overtime per shift/week they give. */
   overtimeFromDays: Record<string, WeekOvertimeResult>;
   /** Null without a balance from a payslip, or once the payslip that pays it is in. */
@@ -2309,6 +2314,17 @@ export interface WeekOvertimeResult {
   hours: number;
   /** The weeks over the week limit. */
   weeks: { from: string; to: string; shifts: number; hours: number; over: number }[];
+}
+
+export interface SickDay {
+  date: string;
+  hours: number;
+}
+export interface SickPeriod {
+  from: string;
+  to: string;
+  days: SickDay[];
+  hours: number;
 }
 
 export interface SalaryModel {
@@ -2354,6 +2370,8 @@ export interface SalaryMonth {
   shifts: number | null;
   hoursFromShifts: number | null;
   effectiveHours: number;
+  /** The month's sick leave (part of the hours), and how many karensavdrag fall in it. */
+  sick: { hours: number; karens: number; days: SickDay[] };
   /** From the days marked in Pendling, when the hours come from the shifts. */
   overtimeFromDays: WeekOvertimeResult | null;
   effectiveOvertimePassHours: number;

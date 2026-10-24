@@ -76,6 +76,7 @@ describe("migrations", () => {
       "savings_values",
       "settings",
       "settlements",
+      "sick_days",
       "statements",
       "tax_returns",
       "tax_table_rows",

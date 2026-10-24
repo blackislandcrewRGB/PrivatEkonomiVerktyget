@@ -894,6 +894,16 @@ export const salaryMonths = sqliteTable("salary_months", {
   updatedAt: text("updated_at").notNull().default(now),
 });
 
+/**
+ * A day (or part of one) the employee was sick, with the hours: the sick pay
+ * and the karensavdrag follow from them (salary/sick.ts). Hours are part of
+ * the work month's hours, as the vacation is.
+ */
+export const sickDays = sqliteTable("sick_days", {
+  date: text("date").primaryKey(),
+  hours: real("hours").notNull(),
+});
+
 /** Skatteverket's tax tables (open data), as fetched: one row per income bracket. */
 export const taxTableRows = sqliteTable(
   "tax_table_rows",

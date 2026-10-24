@@ -26,6 +26,8 @@ export function SalaryView() {
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [preview, setPreview] = useState<SalaryModel | null>(null);
   const [showOb, setShowOb] = useState(false);
+  // A sick day set or taken away changes the forecast being typed without the draft changing.
+  const [sickTick, setSickTick] = useState(0);
   const load = useCallback(
     () =>
       Promise.all([
@@ -40,7 +42,7 @@ export function SalaryView() {
 
   const shifts = info?.shifts[draft.month] ?? null;
   const shiftHours = info?.settings.shiftHours ?? 10.5;
-  const fromShifts = shifts === null ? null : Math.round(shifts * shiftHours * 100) / 100;
+  const fromShifts = shifts === null ? null : Math.round((shifts * shiftHours + (info?.sickShiftExtra[draft.month] ?? 0)) * 100) / 100;
   // With the days marked in Pendling: the overtime per shift/week from them.
   const days = info?.overtimeFromDays[draft.month] ?? null;
   const next = info && months ? nextPayMonth(months, info.today, info.settings.lagMonths, info.settings.payDay) : null;
@@ -56,7 +58,7 @@ export function SalaryView() {
     if (!/^\d{4}-\d{2}$/.test(i.month) || !(i.hours > 0) || Object.values(i).some((v) => typeof v === "number" && Number.isNaN(v))) return setPreview(null);
     const t = setTimeout(() => sendJson<SalaryModel>("POST", "/salary/model", i).then(setPreview, () => setPreview(null)), 150);
     return () => clearTimeout(t);
-  }, [draft, fromShifts, days?.hours]);
+  }, [draft, fromShifts, days?.hours, sickTick]);
 
   if (!info || !months || !next) return null;
   if (info.constants.length === 0) {
@@ -141,6 +143,10 @@ export function SalaryView() {
         setShowOb={setShowOb}
         onSave={save}
         onClear={clear}
+        onSickChanged={() => {
+          void load();
+          setSickTick((t) => t + 1);
+        }}
       />
 
       <MonthsTable months={months} measure={c.hoursPerMonth} full={c.fullTimeHours} onEdit={edit} onRemove={remove} />

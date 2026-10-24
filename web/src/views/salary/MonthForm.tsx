@@ -8,6 +8,7 @@ import { dm, kr } from "../overview/format";
 import type { Draft } from "./draft";
 import { h, monthName, monthOnly } from "./format";
 import { pickerMonths } from "./payMonths";
+import { Sick } from "./Sick";
 import { UnitInput } from "./UnitInput";
 
 type Field = "hours" | "vacationHours" | "atfHours" | "overtimePassHours";
@@ -31,6 +32,7 @@ export function MonthForm({
   setShowOb,
   onSave,
   onClear,
+  onSickChanged,
 }: {
   info: SalaryOverview;
   months: SalaryMonth[];
@@ -45,8 +47,12 @@ export function MonthForm({
   setShowOb: Dispatch<SetStateAction<boolean>>;
   onSave: () => Promise<void>;
   onClear: () => void;
+  /** A sick day was set or taken away: the months and the forecast are read again. */
+  onSickChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [showSick, setShowSick] = useState(false);
+  const sickHours = draft.month ? info.sickDays.filter((d) => d.date.startsWith(draft.month)).reduce((a, d) => a + d.hours, 0) : 0;
   const shifts = info.shifts[draft.month] ?? null;
   const fromShiftsOn = draft.hoursMode === "shifts" && fromShifts !== null;
   const daysApply = fromShiftsOn && days !== null;
@@ -112,6 +118,9 @@ export function MonthForm({
           <button type="button" className="flex h-9 items-center gap-0.5 whitespace-nowrap text-[13px] font-medium text-accent hover:underline" onClick={() => setShowOb((v) => !v)} aria-expanded={showOb}>
             <ChevronRight className={cn("size-3.5 transition-transform", showOb && "rotate-90")} aria-hidden /> OB-timmar per nivå
           </button>
+          <button type="button" className="flex h-9 items-center gap-0.5 whitespace-nowrap text-[13px] font-medium text-accent hover:underline" onClick={() => setShowSick((v) => !v)} aria-expanded={showSick}>
+            <ChevronRight className={cn("size-3.5 transition-transform", showSick && "rotate-90")} aria-hidden /> Sjuk{sickHours > 0 ? ` · ${h(sickHours)} tim` : ""}
+          </button>
           <button
             type="button"
             disabled={!preview || busy}
@@ -136,6 +145,8 @@ export function MonthForm({
           ))}
         </div>
       )}
+
+      {showSick && draft.month && <Sick info={info} month={draft.month} onChanged={onSickChanged} />}
 
       <div className="space-y-0.5 text-[11px] text-ink-3">
         {fromShiftsOn && (

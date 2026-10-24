@@ -16,6 +16,7 @@ import {
   modelMonth,
   notePendingChanges,
   overtimeByMonth,
+  sickExtraByMonth,
   clearPendingChanges,
   pendingChanges,
   removeMonth,
@@ -29,6 +30,7 @@ import { salaryActuals } from "../overview/overview.js";
 import { usualSalary } from "../recurring/estimates.js";
 import { shiftsByMonth } from "../fuel/fuel.js";
 import { scheduleDeadlines, setScheduleReceived } from "../salary/schedule.js";
+import { listSickDays, setSickDay, sickPeriods } from "../salary/sick.js";
 import { isIsoDate } from "../import/text.js";
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -65,6 +67,11 @@ export function salaryRoutes(db: Db) {
       shifts: Object.fromEntries(shiftsByMonth(db)),
       // The overtime per shift/week each month's marked days give (for months with days).
       overtimeFromDays: overtimeByMonth(db),
+      // Sick leave entered (Lön › Sjuk), and the periods it makes up: a karensavdrag per period.
+      sickDays: listSickDays(db),
+      sickPeriods: sickPeriods(listSickDays(db)),
+      // The sick hours added to a month's shifts: its sick days not marked as worked in Pendling.
+      sickShiftExtra: sickExtraByMonth(db),
       vacationPayout: vacationPayout(db),
       // 'Snitt 12 mån': the same average as Fasta utgifter's usual salary, over twelve.
       average: usualSalary(db, todayLocal(), 12),
@@ -95,6 +102,21 @@ export function salaryRoutes(db: Db) {
     notePendingChanges(db, changed);
     return c.json({ results, changed });
   });
+
+  /** Sick hours on a date (PUT {hours}); DELETE takes the day away. The month's forecast follows. */
+  app.put("/sick/:date", async (c) =>
+    guard(async () => {
+      const b = (await c.req.json().catch(() => ({}))) as { hours?: unknown };
+      setSickDay(db, c.req.param("date"), b.hours as number);
+      return { sickDays: listSickDays(db), sickPeriods: sickPeriods(listSickDays(db)) };
+    }),
+  );
+  app.delete("/sick/:date", async (c) =>
+    guard(async () => {
+      setSickDay(db, c.req.param("date"), null);
+      return { sickDays: listSickDays(db), sickPeriods: sickPeriods(listSickDays(db)) };
+    }),
+  );
 
   app.put("/settings", async (c) => guard(async () => setSalarySettings(db, (await c.req.json().catch(() => ({}))) as Record<string, unknown>)));
   app.put("/constants/:id", async (c) => guard(async () => setConstant(db, Number(c.req.param("id")), (await c.req.json().catch(() => ({}))) as Record<string, unknown>)));

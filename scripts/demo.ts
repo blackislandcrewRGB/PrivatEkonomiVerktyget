@@ -157,7 +157,8 @@ price(fund.id, lastImport, 305);
 price(shares.id, addMonths("2026-06-02", shift), 112);
 price(shares.id, lastImport, 118);
 setCash(db, "isk", lastImport, 85000);
-for (const [d, v] of [["2026-01-01", 2350000], ["2026-04-01", 2610000]] as const) setQuarterValue(db, addMonths(d, shift).slice(0, 10), v);
+// A quarter starts on the 1st of Jan, Apr, Jul or Oct: moved by whole quarters, so it still is one.
+for (const [d, v] of [["2026-01-01", 2350000], ["2026-04-01", 2610000]] as const) setQuarterValue(db, addMonths(d, Math.floor(shift / 3) * 3).slice(0, 10), v);
 
 // Consumer prices (made up: about 2 % a year), for the savings after inflation.
 const kpi = ensureSeries(db, { key: KPI_TOTAL, name: "KPI totalt", unit: "index", source: "demo", frequency: "monthly" });
