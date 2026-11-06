@@ -30,12 +30,13 @@ Läs `SPEC.md` (vad som är byggt) och `UI-SPEC.md` (hur gränssnittet ser ut) i
 | `npm run db:generate -- --name <namn>` | Skapar en ny migrering efter en ändring i `server/src/db/schema.ts` |
 | `npm run db:check -- <fil>` | Kontrollsiffror för en databas (läser bara) |
 | `npx tsx server/test/fixtures/generate-bank-fixtures.ts` | Gör om de påhittade bankfilerna i testerna |
+| `npm run check` | Allt före en commit: typkontrollen, personuppgiftskontrollen (på det som är stagat) och testerna. `-- --no-tests` för bara de snabba |
 | `npm run check:personuppgifter` | Kontrollen före commit (se Regler) |
 
 ## Regler
 
 - **Inga personuppgifter i git, aldrig.** Det här är ett öppet repo. Tester och demodata är påhittade: `+46XX5550NNN` som telefonnummer, påhittade namn, vanliga kedjor eller `EXEMPEL…` som handlare. Lägg inte in en riktig export, ett kvitto eller en faktura, inte ens med namnet bortredigerat. Har du ett fall från riktig data som behöver testas: bygg en liten fil för hand med samma form.
-- Kör `npm run check:personuppgifter` före varje commit (den letar efter mobilnummer och förbjudna filer, och efter dina egna mönster i `samples/privat/kontrollmonster.txt` om du har skapat den filen).
+- Kör `git add -A && npm run check` före varje commit. Personuppgiftskontrollen i den (`npm run check:personuppgifter`) letar efter mobilnummer och förbjudna filer, och efter dina egna mönster i `samples/privat/kontrollmonster.txt` om du har skapat den filen.
 - **Kod, kommentarer och commit-meddelanden på engelska. Gränssnitt och dokumentation på svenska.**
 - Belopp i öre som heltal, datum som `YYYY-MM-DD`, "i dag" i lokal tid (`todayLocal`), aldrig `toISOString()` för ett datum.
 - Varje ändring ska ha ett test. Servertester använder `freshDb()` i minnet och rör aldrig en riktig databas. Webbtester mockar API:t med `mockApi` (`web/test/api.ts`).

@@ -24,6 +24,7 @@
     "deploy:rollback": "bash scripts/deploy.sh --rollback",
     "db:pull": "bash scripts/db-pull.sh",
     "db:check": "tsx scripts/db-check.ts",
+    "check": "tsx scripts/check.ts",
     "check:personuppgifter": "bash scripts/personuppgifter.sh",
     "db:demo": "tsx scripts/demo.ts",
     "demo": "tsx scripts/demo.ts && PRIVATEKONOMI_INSTANCE=test DATABASE_PATH=data/demo/finance-demo.db npm run dev"

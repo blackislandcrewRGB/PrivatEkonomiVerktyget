@@ -9,10 +9,10 @@ Personliga arbetsregler (en egen server, egna uppgifter) hör hemma i `CLAUDE.lo
 - **Numrerade steg** med en rapport efter varje: vad som är gjort, vad som återstår, frågor. Fråga hellre än gissa.
 - **UI-ändringar visas** med skärmdumpar i ljust och mörkt tema, i 390, 820 och 1280 px bredd, innan de committas. Kör mot demodatan (`npm run demo`) eller testinstansen (`npm run dev:test`).
 - **Språk:** kod, kommentarer och commit-meddelanden på engelska; allt i gränssnittet och i dokumentationen på svenska.
-- **Commit** när det efterfrågas. Kedjan, och commit bara om allt går igenom:
+- **Commit** när det efterfrågas. Kedjan, och commit bara om allt går igenom (`npm run check` kör typkontrollen, personuppgiftskontrollen på det som är stagat och hela testsviten, och säger en rad när allt är grönt):
 
   ```bash
-  npx vitest run >/dev/null 2>&1 && git add -A && npm run check:personuppgifter && git commit -m "…"
+  git add -A && npm run check && git commit -m "…"
   ```
 
 - **Skriv inte om historiken** (ingen `--amend`, `rebase` eller `reset` av delade commits). Gör en ny commit.
