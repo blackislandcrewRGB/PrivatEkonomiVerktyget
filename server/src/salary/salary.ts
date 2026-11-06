@@ -8,7 +8,7 @@ import { KNOWN_CODES, parsePayslip, parsePayslipPdf, PayslipError, type ParsedPa
 import { curveRate, tableTax, taxCurve } from "./tax.js";
 import { fromText, OB_CODES, rateFor, validateObLevels, type ObLevels } from "./agreement.js";
 import { shiftsByMonth } from "../fuel/fuel.js";
-import { KARENS_SHARE, SICK_PAY_SHARE, listSickDays, sickOf, type SickMonth } from "./sick.js";
+import { KARENS_SHARE, SICK_PAY_SHARE, listSickDays, sickOf, sickShiftExtra, type SickMonth } from "./sick.js";
 
 /**
  * Löneprognos: from the hours of a work month, what lands on the account and
@@ -357,8 +357,8 @@ export interface MonthInput {
   overtimePassHours?: number;
   /** OB hours per level ('150': 7.5). */
   obHours?: Record<string, number>;
-  /** Sick leave in the month (part of the hours); left out: what is entered under Sjuk. */
-  sick?: Pick<SickMonth, "hours" | "karens">;
+  /** Sick leave in the month (part of the hours); left out: what is entered under Sjuk. Without `periods`, `karens` whole ones start in it. */
+  sick?: Pick<SickMonth, "hours" | "karens"> & Partial<Pick<SickMonth, "periods">>;
 }
 
 export interface ModelLine {
@@ -422,10 +422,22 @@ export function modelMonth(db: Db, workMonth: string, input: MonthInput) {
     const payRate = Math.round(c.mertidRate * SICK_PAY_SHARE);
     add({ code: "sjav", name: "Avdrag sjukfrånvaro", quantity: sick.hours, unitPrice: c.mertidRate, amount: -money(sick.hours, c.mertidRate), unverified: true });
     add({ code: "sjlon", name: "Sjuklön 80 %", quantity: sick.hours, unitPrice: payRate, amount: money(sick.hours, payRate), unverified: true });
-    if (sick.karens > 0) {
-      const week = round2((H * 12) / 52);
-      const each = Math.round(week * payRate * KARENS_SHARE);
-      add({ code: "karens", name: "Karensavdrag", quantity: sick.karens, unitPrice: each, amount: -money(sick.karens, each), unverified: true });
+    // The karensavdrag is made from the period's sick pay ("från sjuklönen", 6 §): in date order, never more than it,
+    // so a lone part day loses its sick pay and no more, and what a period's first days didn't cover comes from the next.
+    const week = round2((H * 12) / 52);
+    const full = Math.round(week * payRate * KARENS_SHARE);
+    const periods = sick.periods ?? Array.from({ length: sick.karens }, () => ({ hoursBefore: 0, hours: sick.hours / sick.karens }));
+    // On the period's sick pay so far (rounded once, not month by month), so the months add up to exactly one avdrag.
+    const parts = periods
+      .map((p) => {
+        const before = money(p.hoursBefore, payRate);
+        return Math.min(Math.max(0, full - before), money(p.hoursBefore + p.hours, payRate) - before);
+      })
+      .filter((a) => a > 0);
+    const karens = parts.reduce((a, b) => a + b, 0);
+    if (karens > 0) {
+      const whole = parts.every((a) => a === full);
+      add({ code: "karens", name: "Karensavdrag", quantity: whole ? parts.length : null, unitPrice: whole ? full : null, amount: -karens, unverified: true });
     }
   }
   // The vacation left at the year's end, paid with the April salary (assumed).
@@ -496,10 +508,11 @@ export function quarterOf(month: string): string[] {
  */
 function quarterOvertime(db: Db, workMonth: string, input: MonthInput, H: number, full: number) {
   const entered = new Map(listMonths(db).map((m) => [m.month, m]));
+  // Sick hours are part of a month's hours but not worked: they don't count towards the overtime.
   const months = quarterOf(workMonth).map((month) => {
-    if (month === workMonth) return { month, hours: input.hours, passHours: input.overtimePassHours ?? 0, entered: true };
+    if (month === workMonth) return { month, hours: round2(input.hours - (input.sick ?? sickOf(db, month)).hours), passHours: input.overtimePassHours ?? 0, entered: true };
     const m = entered.get(month);
-    return m ? { month, hours: m.effectiveHours, passHours: m.effectiveOvertimePassHours, entered: true } : { month, hours: H, passHours: 0, entered: false };
+    return m ? { month, hours: round2(m.effectiveHours - m.sick.hours), passHours: m.effectiveOvertimePassHours, entered: true } : { month, hours: H, passHours: 0, entered: false };
   });
   const hours = round2(months.reduce((a, m) => a + m.hours, 0));
   const limit = round2(full * 3);
@@ -529,6 +542,17 @@ function inputFromPayslip(lines: PayslipLine[], hoursWorked: number | null): Mon
   };
 }
 
+/**
+ * The model's input for a payslip in the backtest. Its hours worked leave the
+ * sick hours out (the model's total has them, as the vacation's): what is
+ * entered under Sjuk for its work month is added.
+ */
+export function backtestInput(db: Db, p: { lines: unknown[]; hoursWorked: number | null; workMonth: string | null }): MonthInput {
+  const input = inputFromPayslip(p.lines as PayslipLine[], p.hoursWorked);
+  if (p.workMonth) input.hours = round2(input.hours + sickOf(db, p.workMonth).hours);
+  return input;
+}
+
 /** What the model leaves out, with what it did to the net. */
 const EXPLAIN: Record<string, string> = {
   "676": "friskvårdsutlägg",
@@ -555,10 +579,7 @@ export function backtest(db: Db) {
       if (!monthly || !p.workMonth) {
         return { ...base, model: null, diff: null, explained: [] as { what: string; amount: number }[], note: "Timlön (03b): modellen gäller månadslönen, från april 2026. Skatten stämmer." };
       }
-      // The payslip's hours worked leave the sick hours out (the model's total has them, as the vacation's): what is entered under Sjuk is added.
-      const input = inputFromPayslip(lines, p.hoursWorked);
-      input.hours += sickOf(db, p.workMonth).hours;
-      const m = modelMonth(db, p.workMonth, input)!;
+      const m = modelMonth(db, p.workMonth, backtestInput(db, p))!;
       // Lines after the gross that change the net: outlays, VAT.
       const outside = lines.filter((l) => !["900"].includes(l.code) && l.amount !== null && !m.lines.some((x) => x.code === l.code) && EXPLAIN[l.code]);
       const explained = Object.entries(
@@ -638,21 +659,15 @@ export function overtimeByMonth(db: Db): Record<string, { hours: number; weeks: 
 
 // ---------- Months entered ----------
 
-/**
- * The hours of sick days not marked as worked in Pendling, added to the hours
- * its shifts give (a sick day isn't a commuting day, but it is a shift off);
- * none when no days are marked there, as the count then has the sick days in it.
- */
-export function sickShiftExtra(sickDays: { date: string; hours: number }[], marked: string[]): number {
-  return marked.length ? sickDays.filter((d) => !marked.includes(d.date)).reduce((a, d) => a + d.hours, 0) : 0;
-}
-
-/** Every month with sick days and days marked in Pendling: the sick hours added to its shifts' hours. */
+/** Every month with sick days: the sick hours added to its shifts' hours (see sickShiftExtra). */
 export function sickExtraByMonth(db: Db): Record<string, number> {
   const marked = db.select().from(workShiftDays).all().map((d) => d.date);
   const sick = listSickDays(db);
+  const { shiftHours } = getSalarySettings(db);
   const months = [...new Set(sick.map((d) => d.date.slice(0, 7)))];
-  return Object.fromEntries(months.map((m) => [m, sickShiftExtra(sick.filter((d) => d.date.startsWith(m)), marked.filter((d) => d.startsWith(m)))]).filter(([, v]) => (v as number) > 0));
+  return Object.fromEntries(
+    months.map((m) => [m, sickShiftExtra(sick.filter((d) => d.date.startsWith(m)), marked.filter((d) => d.startsWith(m)), shiftHours)]).filter(([, v]) => (v as number) > 0),
+  );
 }
 
 export function listMonths(db: Db) {
@@ -672,7 +687,7 @@ export function listMonths(db: Db) {
       const marked = days.filter((d) => d.startsWith(r.month));
       // Sick days left unmarked in Pendling (not commuting days) are shifts too: their hours are added to the shifts'.
       const sick = sickOf(db, r.month);
-      const unmarkedSick = sickShiftExtra(sick.days, marked);
+      const unmarkedSick = sickShiftExtra(sick.days, marked, s.shiftHours);
       const fromShifts = r.hoursMode === "shifts" && n !== undefined ? Math.round((n * s.shiftHours + r.vacationHours + unmarkedSick) * 100) / 100 : null;
       const overtime = fromShifts !== null && marked.length && (s.shiftLimit !== null || s.weekLimit !== null) ? weekOvertime(days, r.month, s.shiftHours, s) : null;
       return {

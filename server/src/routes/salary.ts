@@ -136,6 +136,8 @@ export function salaryRoutes(db: Db) {
     guard(async () => {
       const b = (await c.req.json().catch(() => ({}))) as { month?: string } & MonthInput;
       if (!b.month || !/^\d{4}-\d{2}$/.test(b.month)) throw new Error("Månaden ska vara ÅÅÅÅ-MM.");
+      // The sick leave is what is entered under Sjuk, never what a request says.
+      delete b.sick;
       const m = modelMonth(db, b.month, b);
       if (!m) throw new Error("Inga lönekonstanter än: importera en lönespec.");
       return m;

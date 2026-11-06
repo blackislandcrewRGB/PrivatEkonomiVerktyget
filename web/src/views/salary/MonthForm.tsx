@@ -114,7 +114,7 @@ export function MonthForm({
         {field("vacationHours", "Varav semester")}
         {field("atfHours", "Uttag ATF")}
         {field("overtimePassHours", "Övertid pass/vecka", daysApply ? { value: h(days!.hours), disabled: true } : {})}
-        <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-2 @[40rem]:ml-auto">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-2 @[40rem]:ml-auto">
           <button type="button" className="flex h-9 items-center gap-0.5 whitespace-nowrap text-[13px] font-medium text-accent hover:underline" onClick={() => setShowOb((v) => !v)} aria-expanded={showOb}>
             <ChevronRight className={cn("size-3.5 transition-transform", showOb && "rotate-90")} aria-hidden /> OB-timmar per nivå
           </button>
@@ -151,7 +151,8 @@ export function MonthForm({
       <div className="space-y-0.5 text-[11px] text-ink-3">
         {fromShiftsOn && (
           <p data-testid="hours-from-shifts">
-            Timmar: {shifts} pass × {h(info.settings.shiftHours)} = {h(fromShifts!)} tim
+            Timmar: {shifts} pass × {h(info.settings.shiftHours)}
+            {info.sickShiftExtra[draft.month] ? ` + ${h(info.sickShiftExtra[draft.month])} sjuk` : ""} = {h(fromShifts!)} tim
           </p>
         )}
         {daysApply && (

@@ -167,6 +167,50 @@ describe("Lön", () => {
     await waitFor(() => expect(callsTo(fetchMock, "PUT", "/salary/months/2026-09")[0][1]).toMatchObject({ hoursMode: "shifts", hours: 147 }));
   });
 
+  it("from the shifts, a whole sick day (no commute, so no shift) is added to their hours", async () => {
+    fetchMock = mockApi({
+      "GET /salary/months": [],
+      "GET /salary": { ...OVERVIEW, sickDays: [{ date: "2026-09-16", hours: 10.5 }], sickShiftExtra: { "2026-09": 10.5 } },
+      "POST /salary/model": MODEL,
+    });
+    render(<SalaryView />);
+    await userEvent.selectOptions(await screen.findByLabelText("Arbetsmånad"), "2026-09");
+    await userEvent.click(screen.getByRole("switch", { name: /timmar från passen i Pendling \(14 st\)/ }));
+    expect(screen.getByTestId("hours-from-shifts")).toHaveTextContent("Timmar: 14 pass × 10,5 + 10,5 sjuk = 157,5 tim");
+    expect(screen.getByLabelText("Timmar totalt")).toHaveValue("157,5");
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/salary/model").at(-1)?.[1]).toMatchObject({ month: "2026-09", hours: 157.5 }));
+  });
+
+  it("a sick day set while a month is typed reads the forecast again; a refused value goes back to the saved one", async () => {
+    let sickDays = [{ date: "2026-09-16", hours: 10.5 }];
+    fetchMock = mockApi({
+      "GET /salary/months": [],
+      "GET /salary": () => ({ ...OVERVIEW, sickDays, sickPeriods: [] }),
+      "POST /salary/model": MODEL,
+      "PUT /salary/sick": (url: string, init: { json?: unknown }) => {
+        sickDays = [...sickDays, { date: url.split("/").pop()!, hours: (init.json as { hours: number }).hours }];
+        return { sickDays };
+      },
+    });
+    render(<SalaryView />);
+    await userEvent.selectOptions(await screen.findByLabelText("Arbetsmånad"), "2026-09");
+    await userEvent.type(screen.getByLabelText("Timmar totalt"), "150");
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/salary/model").length).toBeGreaterThan(0));
+    const before = callsTo(fetchMock, "POST", "/salary/model").length;
+    await userEvent.click(screen.getByRole("button", { name: /^Sjuk/ }));
+    const sick = screen.getByTestId("sick-fields");
+    await userEvent.type(within(sick).getByLabelText("Sjukdag"), "2026-09-17");
+    await userEvent.click(within(sick).getByRole("button", { name: "Lägg till" }));
+    await waitFor(() => expect(callsTo(fetchMock, "POST", "/salary/model").length).toBeGreaterThan(before));
+    // 4,1 hours is not in quarters: not sent, and the field shows the saved 10,5 again.
+    const field = within(sick).getByLabelText("Sjuktimmar 2026-09-16");
+    await userEvent.clear(field);
+    await userEvent.type(field, "4,1");
+    await userEvent.tab();
+    await waitFor(() => expect(within(screen.getByTestId("sick-fields")).getByLabelText("Sjuktimmar 2026-09-16")).toHaveValue("10,5"));
+    expect(callsTo(fetchMock, "PUT", "/salary/sick/2026-09-16")).toHaveLength(0);
+  });
+
   it("with the days marked in Pendling, the overtime per week comes from them", async () => {
     render(<SalaryView />);
     await userEvent.selectOptions(await screen.findByLabelText("Arbetsmånad"), "2026-07");

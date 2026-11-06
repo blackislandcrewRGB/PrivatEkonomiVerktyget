@@ -16,6 +16,8 @@ const day = (date: string) => new Date(`${date}T00:00:00`).toLocaleDateString("s
 export function Sick({ info, month, onChanged }: { info: SalaryOverview; month: string; onChanged: () => void }) {
   const [date, setDate] = useState("");
   const [hours, setHours] = useState("");
+  // Bumped when a change is refused: the fields show what is saved again.
+  const [reset, setReset] = useState(0);
   const days = info.sickDays.filter((d) => d.date.startsWith(month));
   const periods = info.sickPeriods.filter((p) => p.days.some((d) => d.date.startsWith(month)));
   const shift = h(info.settings.shiftHours);
@@ -24,17 +26,23 @@ export function Sick({ info, month, onChanged }: { info: SalaryOverview; month: 
     try {
       await sendJson(method, `/salary/sick/${on}`, body ?? {});
       onChanged();
+      return true;
     } catch (e) {
       notify({ text: (e as Error).message });
+      setReset((n) => n + 1);
+      return false;
     }
   };
+  /** Quarters of an hour, up to 24, as the server takes them. */
+  const valid = (v: number) => v > 0 && v <= 24 && Math.round(v * 4) === v * 4;
   const add = async () => {
     const hrs = hours.trim() ? num(hours) : info.settings.shiftHours;
     if (!date.startsWith(month)) return notify({ text: `Välj ett datum i ${monthOnly(month)}.` });
-    if (!(hrs > 0)) return notify({ text: "Skriv antal sjuktimmar." });
-    await run("PUT", date, { hours: hrs });
-    setDate("");
-    setHours("");
+    if (!valid(hrs)) return notify({ text: "Sjuktimmarna ska vara mellan 0,25 och 24, i kvartar." });
+    if (await run("PUT", date, { hours: hrs })) {
+      setDate("");
+      setHours("");
+    }
   };
 
   return (
@@ -49,10 +57,16 @@ export function Sick({ info, month, onChanged }: { info: SalaryOverview; month: 
                 aria-label={`Sjuktimmar ${d.date}`}
                 className="w-28"
                 defaultValue={h(d.hours)}
-                key={`${d.date}-${d.hours}`}
+                key={`${d.date}-${d.hours}-${reset}`}
                 onBlur={(e) => {
                   const v = num(e.target.value);
-                  if (v > 0 && v !== d.hours) void run("PUT", d.date, { hours: v });
+                  if (v === d.hours) return;
+                  if (!valid(v)) {
+                    notify({ text: "Sjuktimmarna ska vara mellan 0,25 och 24, i kvartar." });
+                    setReset((n) => n + 1);
+                    return;
+                  }
+                  void run("PUT", d.date, { hours: v });
                 }}
               />
               <button type="button" aria-label={`Ta bort ${d.date}`} onClick={() => void run("DELETE", d.date)} className="text-ink-3 hover:text-negative">
@@ -95,12 +109,12 @@ export function Sick({ info, month, onChanged }: { info: SalaryOverview; month: 
         return (
           <p key={p.from} className="text-[12px] text-ink-2" data-sick-period>
             Sjukperiod {dm(p.from)}–{dm(p.to)} · {h(p.hours)} tim ·{" "}
-            {starts ? `karensavdrag i ${monthOnly(month)}` : `fortsätter från ${monthOnly(p.from.slice(0, 7))}, där karensavdraget görs`}
+            {starts ? `karensavdrag i ${monthOnly(month)}` : `fortsätter från ${monthOnly(p.from.slice(0, 7))}, karensavdraget räknas från ${monthOnly(p.from.slice(0, 7))}`}
           </p>
         );
       })}
       <p className="text-[11px] text-ink-3">
-        Sjuktimmarna ingår i Timmar totalt. De dras med timlönen och betalas som sjuklön, 80 %, och en gång per sjukperiod dras karensavdrag (20 % av en veckas sjuklön). En ny sjukdag inom fem dagar fortsätter perioden. Reglerna är antagna tills en spec med sjuklön är inläst.
+        Sjuktimmarna ingår i Timmar totalt; en hel sjukdag är inget pass i Pendling (avmarkera den där), en deldag ligger i passet. De dras med timlönen och betalas som sjuklön, 80 %, och en gång per sjukperiod dras karensavdrag (20 % av en veckas sjuklön). En ny sjukdag inom fem dagar fortsätter perioden. Reglerna är antagna tills en spec med sjuklön är inläst.
       </p>
     </div>
   );

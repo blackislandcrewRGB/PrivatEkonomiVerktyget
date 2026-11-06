@@ -69,14 +69,39 @@ export function sickPeriods(days: SickDay[]): SickPeriod[] {
 export interface SickMonth {
   /** The month's sick hours. */
   hours: number;
-  /** How many sick periods start in the month: each has its karensavdrag in it. */
+  /** How many sick periods start in the month. */
   karens: number;
   days: SickDay[];
+  /**
+   * The periods with days in the month: their sick hours before it and in it.
+   * The karensavdrag is made from a period's sick pay in date order, so a
+   * period that began the month before takes what its days then didn't cover.
+   */
+  periods: { from: string; hoursBefore: number; hours: number }[];
 }
 
-/** What a work month has of sick leave: the hours, and the karensavdrag of the periods that start in it. */
+/** What a work month has of sick leave: the hours, and the periods the karensavdrag is made from. */
 export function sickOf(db: Db, month: string): SickMonth {
   const all = listSickDays(db);
   const days = all.filter((d) => d.date.startsWith(month));
-  return { hours: days.reduce((s, d) => s + d.hours, 0), karens: sickPeriods(all).filter((p) => p.from.startsWith(month)).length, days };
+  const periods = sickPeriods(all)
+    .filter((p) => p.days.some((d) => d.date.startsWith(month)))
+    .map((p) => ({
+      from: p.from,
+      hoursBefore: p.days.filter((d) => d.date < `${month}-01`).reduce((s, d) => s + d.hours, 0),
+      hours: p.days.filter((d) => d.date.startsWith(month)).reduce((s, d) => s + d.hours, 0),
+    }));
+  return { hours: days.reduce((s, d) => s + d.hours, 0), karens: periods.filter((p) => p.from.startsWith(month)).length, days, periods };
+}
+
+/**
+ * The sick hours added to the hours a month's shifts give. The shifts in
+ * Pendling are the days driven, so a sick day is not among them, except a
+ * day with a few hours off that was driven. With days marked there: the sick
+ * days not marked are added. Without: a whole day (a shift's hours or more)
+ * is added, a part day is in its shift.
+ */
+export function sickShiftExtra(days: SickDay[], marked: string[], shiftHours: number): number {
+  const off = marked.length ? days.filter((d) => !marked.includes(d.date)) : days.filter((d) => d.hours >= shiftHours);
+  return off.reduce((a, d) => a + d.hours, 0);
 }
