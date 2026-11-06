@@ -315,7 +315,7 @@ describe("warnings", () => {
     db.update(accounts).set({ balance: 100, balanceUpdatedAt: "2026-09-01" }).where(eq(accounts.name, PRIVAT)).run();
     db.update(accounts).set({ balance: 100, balanceUpdatedAt: "2026-09-17" }).where(eq(accounts.name, ESPAR)).run();
     tx(db, { account: ESPAR, date: "2026-09-01", amount: -100, desc: "UNCAT" });
-    const csn = expense(db, { name: "CSN", amount: 229500, day: 5, account: ESPAR, pattern: "CSN" });
+    const csn = expense(db, { name: "CSN", amount: 225000, day: 5, account: ESPAR, pattern: "CSN" });
     // August's charge (a 31 Aug charge would count as September's: within ±5 days of 5 Sep).
     tx(db, { account: ESPAR, date: "2026-08-05", amount: -230000, desc: "CSN" });
     linkRecurring(db);
@@ -337,7 +337,7 @@ describe("Att göra", () => {
     db.update(accounts).set({ balance: 100, balanceUpdatedAt: "2026-09-01" }).where(eq(accounts.name, PRIVAT)).run();
     db.update(accounts).set({ balance: 100, balanceUpdatedAt: "2026-09-17" }).where(eq(accounts.name, ESPAR)).run();
     tx(db, { account: ESPAR, date: "2026-09-01", amount: -100, desc: "UNCAT" });
-    const csn = expense(db, { name: "CSN", amount: 229500, day: 5, account: ESPAR, pattern: "CSN" });
+    const csn = expense(db, { name: "CSN", amount: 225000, day: 5, account: ESPAR, pattern: "CSN" });
     const gym = expense(db, { name: "Gym", amount: 39900, day: 10, account: ESPAR, pattern: "GYM" });
     tx(db, { account: ESPAR, date: "2026-08-05", amount: -230000, desc: "CSN" });
     linkRecurring(db);
@@ -357,14 +357,14 @@ describe("Att göra", () => {
       // missed draw each, 3 days after its day.
       // No buffer_low: the buffer is what is left on the 1st, after this month's salary — not the 1 kr before it.
       ["watch", `Gym (399 kr) skulle dragits 10/9 från ${ESPAR} men syns inte`],
-      ["watch", `CSN (2 295 kr) skulle dragits 5/9 från ${ESPAR} men syns inte`],
-      ["amount_changed", "CSN drogs med 2 300 kr, utgiften säger 2 295 kr"],
+      ["watch", `CSN (2 250 kr) skulle dragits 5/9 från ${ESPAR} men syns inte`],
+      ["amount_changed", "CSN drogs med 2 300 kr, utgiften säger 2 250 kr"],
     ]);
     expect(tasks[0]).toMatchObject({ id: `invoice:${s.id}`, statementId: s.id, accountId: card });
     expect(tasks[3]).toMatchObject({ id: `missed_charge:${gym.id}:2026-09`, finding: { kind: "missed_charge", expenseId: gym.id, period: "2026-09" } });
-    expect(tasks[4].finding).toMatchObject({ expenseId: csn.id, period: "2026-09", amount: 229500 });
+    expect(tasks[4].finding).toMatchObject({ expenseId: csn.id, period: "2026-09", amount: 225000 });
     expect(tasks[1]).toMatchObject({ id: `balance:${acc(db, PRIVAT).id}:2026-09-01`, accountId: acc(db, PRIVAT).id });
-    expect(tasks[5].items).toEqual([{ expenseId: csn.id, name: "CSN", amount: 229500, latest: 230000 }]);
+    expect(tasks[5].items).toEqual([{ expenseId: csn.id, name: "CSN", amount: 225000, latest: 230000 }]);
     // The same things give the same ids tomorrow (dismissed for the day stays dismissed today only).
     expect(buildOverview(db, "2026-09-18").tasks.map((t) => t.id)).toEqual(tasks.map((t) => t.id));
 

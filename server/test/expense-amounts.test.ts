@@ -70,9 +70,23 @@ describe("amount per month for a recurring expense", () => {
     expect(buildOverview(db, TODAY).warnings.some((w) => w.kind === "amount_changed")).toBe(false);
   });
 
+  it("a charge within 1 % of what the month expected is that amount; over that is a change", async () => {
+    const { db, app, csn } = setup();
+    // 1 798,68 against 1 800,00: a few öre off (a rate moving), no change of price.
+    charge(db, "2026-08-27", -179868);
+    linkRecurring(db);
+    const list = async () => ((await (await app.request("/api/recurring-expenses")).json()) as { id: number; amountChanged: boolean }[]).find((e) => e.id === csn.id)!;
+    expect((await list()).amountChanged).toBe(false);
+    expect(buildOverview(db, TODAY).warnings.some((w) => w.kind === "amount_changed")).toBe(false);
+    // 1 770 kr is 1,7 % under: a change.
+    charge(db, "2026-09-27", -177000);
+    linkRecurring(db);
+    expect((await list()).amountChanged).toBe(true);
+  });
+
   it("doesn't flag an old month without its own amount once later months are planned", async () => {
     const { db, app, csn } = setup();
-    charge(db, "2026-08-31", -181000);
+    charge(db, "2026-08-31", -183000);
     linkRecurring(db);
     const list = async () => ((await (await app.request("/api/recurring-expenses")).json()) as { id: number; amountChanged: boolean }[]).find((e) => e.id === csn.id)!;
     expect((await list()).amountChanged).toBe(true);

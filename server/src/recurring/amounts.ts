@@ -32,6 +32,8 @@ export function expectedAmounts(
 const FOREIGN_TOLERANCE = 1;
 /** Without the charge's foreign amount: this far from the kronor amount is still the rate. */
 const KRONOR_TOLERANCE = 0.03;
+/** A charge in kronor this close to what the month expected (1 %) is that amount: a few öre off is no change of price. */
+export const AMOUNT_CHANGE_TOLERANCE = 0.01;
 
 /**
  * The latest linked charge and whether it differs from what was expected for
@@ -90,7 +92,7 @@ export function latestChargeCheck(db: Db, e: Expense, expected = expectedAmounts
     .all()
     .map((r) => r.month);
   const want = expected(e, period);
-  const differs = e.partOfId === null && Math.abs(amount) !== want;
+  const differs = e.partOfId === null && Math.abs(Math.abs(amount) - want) > want * AMOUNT_CHANGE_TOLERANCE;
   const plannedAhead = !own.includes(period) && own.some((m) => m > period);
   return { latest: { bookingDate, amount }, expected: want, changed: differs && !plannedAhead, foreign: null };
 }
